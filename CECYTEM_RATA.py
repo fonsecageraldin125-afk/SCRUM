@@ -1321,7 +1321,7 @@ class SistemaNezahualcoyotl:
             "Asignar docentes",
             "Relaciona un docente con uno o varios grupos."
         )
-
+#Leticia Alexa Silva Velasco
         try:
             docentes = self.consultar("""
                 SELECT usuario, nombre
