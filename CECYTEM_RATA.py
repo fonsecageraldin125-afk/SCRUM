@@ -1060,7 +1060,7 @@ class SistemaNezahualcoyotl:
             pendientes = self.contar(estado="Pendiente")
         except mysql.connector.Error:
             total = incidencias = pendientes = "—"
-
+#samadhi Cayetano Fonseca:tabla incidencaia
         for titulo, valor, detalle in [
             ("Registros", total, "Registros guardados"),
             ("Incidencias", incidencias, "Incidencias registradas"),
