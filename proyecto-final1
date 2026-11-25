@@ -1,0 +1,1364 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, colorchooser
+import mysql.connector
+import hashlib
+import hmac
+import secrets
+import json
+from tkinter import filedialog
+from datetime import date, datetime
+
+try:
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    GRAFICAS_DISPONIBLES = True
+except ImportError:
+    GRAFICAS_DISPONIBLES = False
+
+try:
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Font, PatternFill
+    EXCEL_DISPONIBLE = True
+except ImportError:
+    EXCEL_DISPONIBLE = False
+
+
+
+
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "cecytem"
+}
+
+AZUL = "#0D3B66"
+AZUL_BOTON = "#1565C0"
+AZUL_CLARO = "#E3F2FD"
+
+AZUL_MEDIO = "#2563EB"
+AZUL_SUAVE = "#DBEAFE"
+
+FONDO = "#F1F5F9"
+PANEL = "#FFFFFF"
+GRAFITO = "#0D3B66"
+AMARILLO = "#1565C0"
+CIAN = "#00E5FF"
+MAGENTA = "#FF2BD6"
+TEXTO = "#1E293B"
+SECUNDARIO = "#64748B"
+ENTRADA = "#FFFFFF"
+BLANCO = PANEL
+AZUL = GRAFITO
+AZUL_BOTON = AMARILLO
+AZUL_CLARO = "#E3F2FD"
+GRIS = SECUNDARIO
+ROJO = "#B91C1C"
+NARANJA = "#EA580C"
+
+
+COLORES_ALERTA = {
+    "Baja": {"fuerte": "#16A34A", "suave": "#DCFCE7", "texto": "#14532D", "icono": "🟢🔔"},
+    "Media": {"fuerte": "#EAB308", "suave": "#FEF9C3", "texto": "#713F12", "icono": "🟡🔔"},
+    "Alta": {"fuerte": "#F97316", "suave": "#FFEDD5", "texto": "#7C2D12", "icono": "🟠🔔"},
+    "Crítica": {"fuerte": "#DC2626", "suave": "#FEE2E2", "texto": "#7F1D1D", "icono": "🔴🔔"},
+}
+
+GRUPOS_BASE = [
+    "1A", "1B", "1C",
+    "2A", "2B", "2C",
+    "3A", "3B", "3C"
+]
+
+ESTADOS_ASISTENCIA = [
+    "Presente", "Falta", "Retardo", "Justificante"
+]
+
+
+def conectar():
+    return mysql.connector.connect(**DB_CONFIG)
+
+
+def generar_hash_password(password, sal=None):
+    """Genera un hash PBKDF2 con sal aleatoria para nuevas contraseñas."""
+    sal = sal or secrets.token_hex(16)
+    iteraciones = 310000
+    resultado = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), sal.encode("utf-8"), iteraciones
+    ).hex()
+    return f"pbkdf2_sha256${iteraciones}${sal}${resultado}"
+
+
+def verificar_password(password, guardada):
+    """Verifica hashes actuales y formatos anteriores para conservar las cuentas."""
+    if guardada is None:
+        return False
+
+    guardada = str(guardada)
+
+    if guardada.startswith("pbkdf2_sha256$"):
+        try:
+            algoritmo, iteraciones, sal, hash_guardado = guardada.split("$", 3)
+            iteraciones = int(iteraciones)
+            if algoritmo != "pbkdf2_sha256" or not 100000 <= iteraciones <= 2000000:
+                return False
+            calculado = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), sal.encode("utf-8"), iteraciones
+            ).hex()
+            return hmac.compare_digest(calculado, hash_guardado.lower())
+        except (ValueError, TypeError):
+            return False
+
+    
+    if hmac.compare_digest(password, guardada):
+        return True
+
+    sha = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    if hmac.compare_digest(sha, guardada.lower()):
+        return True
+
+    if ":" in guardada:
+        sal, hash_guardado = guardada.split(":", 1)
+        candidatos = [
+            hashlib.sha256((password + sal).encode("utf-8")).hexdigest(),
+            hashlib.sha256((sal + password).encode("utf-8")).hexdigest()
+        ]
+        if any(hmac.compare_digest(x, hash_guardado.lower()) for x in candidatos):
+            return True
+
+    return False
+
+
+def crear_tablas():
+    """Crea tablas auxiliares sin borrar tablas existentes."""
+    conexion = conectar()
+
+    try:
+        cursor = conexion.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS grupos_escolares (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nombre VARCHAR(30) NOT NULL UNIQUE,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS docente_grupos (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                docente VARCHAR(100) NOT NULL,
+                grupo_id INT NOT NULL,
+                UNIQUE KEY asignacion_unica (docente, grupo_id),
+                FOREIGN KEY (grupo_id)
+                    REFERENCES grupos_escolares(id)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alumnos_escolares (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                grupo_id INT NOT NULL,
+                numero_lista INT NOT NULL,
+                nombre VARCHAR(150) NOT NULL,
+                activo BOOLEAN DEFAULT TRUE,
+                UNIQUE KEY alumno_lista (grupo_id, numero_lista),
+                FOREIGN KEY (grupo_id)
+                    REFERENCES grupos_escolares(id)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asistencias_escolares (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                alumno_id INT NOT NULL,
+                grupo_id INT NOT NULL,
+                fecha DATE NOT NULL,
+                estado VARCHAR(30) NOT NULL,
+                docente VARCHAR(100) NOT NULL,
+                observaciones TEXT,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY asistencia_diaria (alumno_id, fecha),
+                FOREIGN KEY (alumno_id)
+                    REFERENCES alumnos_escolares(id),
+                FOREIGN KEY (grupo_id)
+                    REFERENCES grupos_escolares(id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS registros_escolares (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                tipo VARCHAR(50) NOT NULL,
+                alumno VARCHAR(150) NOT NULL,
+                grupo VARCHAR(50),
+                fecha DATE NOT NULL,
+                hora TIME NULL,
+                detalle TEXT,
+                accion VARCHAR(150),
+                evidencia VARCHAR(500),
+                seguimiento BOOLEAN DEFAULT FALSE,
+                gravedad VARCHAR(20) NOT NULL DEFAULT 'Baja',
+                estado VARCHAR(40) DEFAULT 'Pendiente',
+                registrado_por VARCHAR(100) NOT NULL,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'registros_escolares'
+              AND COLUMN_NAME = 'gravedad'
+        """)
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                ALTER TABLE registros_escolares
+                ADD COLUMN gravedad VARCHAR(20) NOT NULL DEFAULT 'Baja'
+            """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS decisiones_directivas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                registro_id INT NULL,
+                alumno VARCHAR(150) NOT NULL,
+                accion VARCHAR(100) NOT NULL,
+                justificacion TEXT,
+                estado VARCHAR(40) DEFAULT 'Pendiente',
+                director VARCHAR(100) NOT NULL,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cartas_compromiso (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                alumno VARCHAR(150) NOT NULL,
+                tutor VARCHAR(150),
+                motivo TEXT,
+                compromisos TEXT,
+                fecha DATE,
+                director VARCHAR(100) NOT NULL,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS preferencias_usuario (
+                usuario VARCHAR(100) PRIMARY KEY,
+                colores JSON NOT NULL,
+                actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+
+        for grupo in GRUPOS_BASE:
+            cursor.execute("""
+                INSERT IGNORE INTO grupos_escolares (nombre)
+                VALUES (%s)
+            """, (grupo,))
+
+        conexion.commit()
+
+    finally:
+        conexion.close()
+
+
+class SistemaNezahualcoyotl:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sistema Escolar Nezahualcóyotl")
+        self.root.configure(bg=FONDO)
+        self.root.minsize(320, 480)
+        self._configurando_ventana = False
+        self._modo_movil = None
+        self._ventana_menu_movil = None
+        self._programar_ajuste = None
+
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            ancho = self.root.winfo_screenwidth()
+            alto = self.root.winfo_screenheight()
+            self.root.geometry(f"{ancho}x{alto}+0+0")
+
+        self.usuario = ""
+        self.nombre = ""
+        self.rol = ""
+
+        self.color = AZUL_BOTON
+        self.oscuro = AZUL
+        self.claro = AZUL_CLARO
+
+        self.contenido = None
+        self.campos = {}
+        self.vista_actual = "Inicio"
+        self.grupo_seleccionado = None
+        self.alumnos_lista = []
+        self.variables_asistencia = {}
+        self.variables_observaciones = {}
+        self.canvas_grafica = None
+        self.marco_graficas = None
+        self._temporizador_campana = None
+        self.colores_actuales = (FONDO, PANEL, GRAFITO, AMARILLO, CIAN, MAGENTA, TEXTO, SECUNDARIO, ENTRADA)
+
+        self.configurar_estilos()
+        self.mostrar_login()
+
+   
+
+    def configurar_estilos(self):
+        """Aplica estilos ttk coherentes con el tema activo."""
+        estilo = ttk.Style()
+
+        try:
+            estilo.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        estilo.configure(
+            "Treeview",
+            rowheight=34,
+            font=("Segoe UI", 10),
+            background=PANEL,
+            fieldbackground=PANEL,
+            foreground=TEXTO,
+            borderwidth=0,
+            relief="flat"
+        )
+        estilo.map(
+            "Treeview",
+            background=[("selected", AMARILLO)],
+            foreground=[("selected", GRAFITO)]
+        )
+        estilo.configure(
+            "Treeview.Heading",
+            font=("Segoe UI", 10, "bold"),
+            background=GRAFITO,
+            foreground="#FFFFFF",
+            padding=(9, 9),
+            relief="flat"
+        )
+        estilo.map(
+            "Treeview.Heading",
+            background=[("active", AMARILLO)],
+            foreground=[("active", GRAFITO)]
+        )
+        estilo.configure("TEntry", padding=(9, 8), fieldbackground=ENTRADA)
+        estilo.configure("TCombobox", padding=(9, 7), fieldbackground=ENTRADA)
+        estilo.configure("TScrollbar", arrowsize=14)
+
+    def limpiar_root(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+    def limpiar_contenido(self):
+        if self.contenido:
+            for widget in self.contenido.winfo_children():
+                widget.destroy()
+
+    def boton(self, padre, texto, comando, color=None):
+        """Crea botones planos con contraste automático para ambos temas."""
+        fondo_boton = color or self.color
+        texto_boton = GRAFITO if fondo_boton.upper() in (AMARILLO.upper(), CIAN.upper()) else PANEL
+        boton = tk.Button(
+            padre,
+            text=texto,
+            command=comando,
+            bg=fondo_boton,
+            fg=texto_boton,
+            activebackground=CIAN if fondo_boton.upper() != CIAN.upper() else AMARILLO,
+            activeforeground=GRAFITO,
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+            padx=14,
+            pady=9,
+            highlightthickness=0
+        )
+        color_normal = fondo_boton
+        texto_normal = texto_boton
+        boton.bind(
+            "<Enter>",
+            lambda evento, w=boton: w.configure(bg=CIAN, fg=GRAFITO)
+        )
+        boton.bind(
+            "<Leave>",
+            lambda evento, w=boton, c=color_normal, t=texto_normal: w.configure(bg=c, fg=t)
+        )
+        return boton
+
+    def titulo(self, texto, descripcion=""):
+        encabezado = tk.Frame(self.contenido, bg=FONDO)
+        encabezado.pack(fill="x", pady=(0, 14))
+        tk.Frame(encabezado, bg=AMARILLO, width=5, height=38).pack(side="left", padx=(0, 11))
+        textos = tk.Frame(encabezado, bg=FONDO)
+        textos.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            textos,
+            text=texto,
+            bg=FONDO,
+            fg=TEXTO,
+            font=("Segoe UI", 22, "bold"),
+            anchor="w"
+        ).pack(fill="x")
+
+        if descripcion:
+            tk.Label(
+                textos,
+                text=descripcion,
+                bg=FONDO,
+                fg=SECUNDARIO,
+                font=("Segoe UI", 10),
+                anchor="w",
+                justify="left",
+                wraplength=1000
+            ).pack(fill="x", pady=(3, 0))
+
+    def leer_campo(self, nombre):
+        widget = self.campos.get(nombre)
+
+        if widget is None:
+            return ""
+
+        if isinstance(widget, tk.Text):
+            return widget.get("1.0", "end-1c").strip()
+
+        return widget.get().strip()
+
+    def crear_scroll(self, padre):
+        """Area desplazable para pantallas con muchos elementos."""
+        marco = tk.Frame(padre, bg=FONDO)
+        marco.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(
+            marco, bg=FONDO, highlightthickness=0
+        )
+        scroll = ttk.Scrollbar(
+            marco, orient="vertical", command=canvas.yview
+        )
+
+        interior = tk.Frame(canvas, bg=FONDO)
+        ventana = canvas.create_window(
+            (0, 0), window=interior, anchor="nw"
+        )
+
+        interior.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(
+                ventana, width=e.width
+            )
+        )
+
+        canvas.configure(yscrollcommand=scroll.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        return interior
+
+   
+
+    def mostrar_login(self):
+        self.limpiar_root()
+        self.root.configure(bg=FONDO)
+
+        marco = tk.Frame(
+            self.root,
+            bg=BLANCO,
+            padx=22,
+            pady=22,
+            highlightbackground="#CBD5E1",
+            highlightthickness=1
+        )
+        marco.place(
+            relx=0.5, rely=0.5, anchor="center",
+            relwidth=0.90, width=-24, height=380
+        )
+        marco.configure(width=390)
+        marco.bind("<Configure>", self._ajustar_login)
+
+        tk.Label(
+            marco, text="NEZAHUALCÓYOTL",
+            bg=BLANCO, fg=AZUL,
+            font=("Segoe UI", 28, "bold")
+        ).pack(pady=(5, 0))
+
+        tk.Label(
+            marco, text="Sistema Escolar Nezahualcóyotl",
+            bg=BLANCO, fg=GRIS
+        ).pack(pady=(0, 22))
+
+        tk.Label(
+            marco, text="Usuario",
+            bg=BLANCO, fg=TEXTO, anchor="w"
+        ).pack(fill="x")
+
+        self.entrada_usuario = ttk.Entry(marco)
+        self.entrada_usuario.pack(fill="x", pady=(5, 12))
+
+        tk.Label(
+            marco, text="Contraseña",
+            bg=BLANCO, fg=TEXTO, anchor="w"
+        ).pack(fill="x")
+
+        self.entrada_password = ttk.Entry(marco, show="*")
+        self.entrada_password.pack(fill="x", pady=(5, 18))
+        self.entrada_password.bind(
+            "<Return>", lambda e: self.validar_login()
+        )
+
+        self.boton(
+            marco, "Iniciar sesión",
+            self.validar_login, AZUL_BOTON
+        ).pack(fill="x")
+
+        tk.Label(
+            marco,
+            text="Acceso para docentes y dirección",
+            bg=BLANCO, fg=GRIS,
+            font=("Segoe UI", 9)
+        ).pack(pady=17)
+
+        self.entrada_usuario.focus_set()
+
+    def _ajustar_login(self, evento=None):
+        """Reduce tipografías y espacios cuando la ventana es estrecha."""
+        if not hasattr(self, "entrada_usuario"):
+            return
+        ancho = self.root.winfo_width()
+        compacto = ancho < 520
+        tam_titulo = 19 if compacto else 25
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Frame):
+                for hijo in widget.winfo_children():
+                    if isinstance(hijo, tk.Label) and hijo.cget("text") == "NEZAHUALCÓYOTL":
+                        hijo.configure(font=("Segoe UI", tam_titulo, "bold"))
+
+    def _programar_ajuste_responsivo(self, evento=None):
+        """Evita ejecutar el ajuste muchas veces durante un redimensionamiento."""
+        if evento is not None and evento.widget is not self.root:
+            return
+        if self._programar_ajuste is not None:
+            try:
+                self.root.after_cancel(self._programar_ajuste)
+            except tk.TclError:
+                pass
+        self._programar_ajuste = self.root.after(120, self._ajustar_distribucion)
+
+    def _ajustar_distribucion(self):
+        self._programar_ajuste = None
+        if not hasattr(self, "menu_lateral") or not self.menu_lateral.winfo_exists():
+            return
+        ancho = self.root.winfo_width()
+        modo_movil = ancho < 760
+        if hasattr(self, "etiqueta_usuario_barra") and self.etiqueta_usuario_barra.winfo_exists():
+            if ancho < 520:
+                self.etiqueta_usuario_barra.pack_forget()
+            elif not self.etiqueta_usuario_barra.winfo_manager():
+                self.etiqueta_usuario_barra.pack(side="left", padx=10)
+        if hasattr(self, "etiqueta_marca") and self.etiqueta_marca.winfo_exists():
+            self.etiqueta_marca.configure(font=("Segoe UI", 12 if ancho < 520 else 17, "bold"))
+        if modo_movil == self._modo_movil:
+            return
+        self._modo_movil = modo_movil
+        if modo_movil:
+            self.menu_lateral.pack_forget()
+            if hasattr(self, "boton_menu_movil") and self.boton_menu_movil.winfo_exists():
+                self.boton_menu_movil.pack(side="left", padx=4, pady=8)
+            if hasattr(self, "contenido") and self.contenido.winfo_exists():
+                self.contenido.configure(padx=8, pady=10)
+        else:
+            if hasattr(self, "boton_menu_movil") and self.boton_menu_movil.winfo_exists():
+                self.boton_menu_movil.pack_forget()
+            self.menu_lateral.pack(side="left", fill="y", before=self.area_principal)
+            if hasattr(self, "contenido") and self.contenido.winfo_exists():
+                self.contenido.configure(padx=16, pady=16)
+            if self._ventana_menu_movil is not None:
+                try:
+                    self._ventana_menu_movil.destroy()
+                except tk.TclError:
+                    pass
+                self._ventana_menu_movil = None
+
+    def _abrir_menu_movil(self):
+        """Muestra las secciones en una ventana compacta para pantallas pequeñas."""
+        if self._ventana_menu_movil is not None:
+            try:
+                if self._ventana_menu_movil.winfo_exists():
+                    self._ventana_menu_movil.lift()
+                    return
+            except tk.TclError:
+                pass
+        ventana = tk.Toplevel(self.root)
+        self._ventana_menu_movil = ventana
+        ventana.title("Menú principal")
+        ventana.configure(bg=self.oscuro)
+        ancho = max(250, min(320, self.root.winfo_width() - 30))
+        alto = min(max(360, ventana.winfo_screenheight() - 140), 620)
+        ventana.geometry(f"{ancho}x{alto}")
+        ventana.transient(self.root)
+        encabezado = tk.Label(
+            ventana, text="MENÚ PRINCIPAL", bg=self.oscuro,
+            fg=BLANCO, font=("Segoe UI", 12, "bold")
+        )
+        encabezado.pack(fill="x", padx=12, pady=12)
+        lienzo = tk.Canvas(ventana, bg=self.oscuro, highlightthickness=0)
+        barra = ttk.Scrollbar(ventana, orient="vertical", command=lienzo.yview)
+        interior = tk.Frame(lienzo, bg=self.oscuro)
+        interior.bind("<Configure>", lambda e: lienzo.configure(scrollregion=lienzo.bbox("all")))
+        lienzo.create_window((0, 0), window=interior, anchor="nw", width=ancho - 25)
+        lienzo.configure(yscrollcommand=barra.set)
+        lienzo.pack(side="left", fill="both", expand=True)
+        barra.pack(side="right", fill="y")
+        for opcion in self.obtener_menu():
+            tk.Button(
+                interior, text=opcion, command=lambda n=opcion: self._seleccionar_menu_movil(n),
+                bg=AMARILLO if opcion == self.vista_actual else self.oscuro,
+                fg=GRAFITO if opcion == self.vista_actual else BLANCO,
+                activebackground=AMARILLO, activeforeground=GRAFITO,
+                font=("Segoe UI", 10), relief="flat", anchor="w",
+                padx=14, pady=12, bd=0
+            ).pack(fill="x", padx=5, pady=2)
+        ventana.protocol("WM_DELETE_WINDOW", self._cerrar_menu_movil)
+
+    def _seleccionar_menu_movil(self, opcion):
+        self._cerrar_menu_movil()
+        self.ir(opcion)
+
+    def _cerrar_menu_movil(self):
+        if self._ventana_menu_movil is not None:
+            try:
+                self._ventana_menu_movil.destroy()
+            except tk.TclError:
+                pass
+            self._ventana_menu_movil = None
+
+    def validar_login(self):
+        usuario = self.entrada_usuario.get().strip()
+        password = self.entrada_password.get()
+
+        if not usuario or not password:
+            messagebox.showwarning(
+                "Datos incompletos",
+                "Escribe tu usuario y contraseña."
+            )
+            return
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor(dictionary=True)
+
+            cursor.execute("""
+                SELECT nombre, usuario, password_hash, rol
+                FROM usuarios
+                WHERE usuario = %s
+                LIMIT 1
+            """, (usuario,))
+
+            fila = cursor.fetchone()
+
+            if not fila or not verificar_password(
+                password, fila.get("password_hash")
+            ):
+                messagebox.showerror(
+                    "Acceso denegado",
+                    "Usuario o contraseña incorrectos."
+                )
+                return
+
+            rol = str(fila.get("rol") or "").strip().lower()
+
+            if rol not in ("docente", "director"):
+                messagebox.showerror(
+                    "Rol inválido",
+                    "La cuenta debe tener rol docente o director."
+                )
+                return
+
+            self.usuario = str(fila["usuario"])
+            self.nombre = str(fila.get("nombre") or usuario)
+            self.rol = rol
+
+            hash_actual = str(fila.get("password_hash") or "")
+            if not hash_actual.startswith("pbkdf2_sha256$"):
+                nuevo_hash = generar_hash_password(password)
+                cursor.execute(
+                    "UPDATE usuarios SET password_hash=%s WHERE usuario=%s",
+                    (nuevo_hash, self.usuario)
+                )
+                conexion.commit()
+
+            if rol == "docente":
+                self.color, self.oscuro, self.claro = (
+                    AZUL_BOTON, AZUL, AZUL_CLARO
+                )
+            else:
+                self.color, self.oscuro, self.claro = (
+                    AZUL_MEDIO, AZUL, AZUL_SUAVE
+                )
+
+        except mysql.connector.Error as error:
+            messagebox.showerror(
+                "Error de MySQL",
+                f"No se pudo iniciar sesión:\n\n{error}\n\n"
+                "Verifica DB_CONFIG y la estructura de usuarios."
+            )
+            return
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+        try:
+            crear_tablas()
+        except mysql.connector.Error as error:
+            messagebox.showerror(
+                "Error al preparar tablas", str(error)
+            )
+            return
+
+        self.cargar_colores_usuario()
+        self.mostrar_sistema()
+
+    
+    def guardar_colores_usuario(self, colores=None):
+        """Guarda el tema de la cuenta activa para restaurarlo en el próximo acceso."""
+        if not self.usuario:
+            return
+        colores = tuple(colores or self.colores_actuales)
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            cursor.execute("""
+                INSERT INTO preferencias_usuario (usuario, colores)
+                VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE colores=VALUES(colores)
+            """, (self.usuario, json.dumps(colores)))
+            conexion.commit()
+        except mysql.connector.Error as error:
+            if conexion is not None:
+                conexion.rollback()
+            messagebox.showwarning(
+                "No se guardó el tema",
+                f"Los colores se aplicaron, pero no fue posible guardarlos en MySQL.\\n{error}"
+            )
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def cargar_colores_usuario(self):
+        """Recupera los nueve colores guardados para la cuenta activa."""
+        if not self.usuario:
+            return
+        try:
+            filas = self.consultar(
+                "SELECT colores FROM preferencias_usuario WHERE usuario=%s",
+                (self.usuario,)
+            )
+            if filas and filas[0].get("colores"):
+                colores = json.loads(filas[0]["colores"])
+                if isinstance(colores, list) and len(colores) == 6:
+                    fondo, oscuro, acento, seleccionado, texto, panel = colores
+                    colores = [
+                        fondo, panel, oscuro, acento, "#00E5FF",
+                        "#FF2BD6", texto, "#A8A8B8", panel
+                    ]
+                if isinstance(colores, list) and len(colores) == 9:
+                    global FONDO, PANEL, GRAFITO, AMARILLO, CIAN, MAGENTA
+                    global TEXTO, SECUNDARIO, ENTRADA, BLANCO, AZUL, AZUL_BOTON
+                    global AZUL_CLARO, GRIS
+                    (FONDO, PANEL, GRAFITO, AMARILLO, CIAN, MAGENTA,
+                     TEXTO, SECUNDARIO, ENTRADA) = tuple(colores)
+                    BLANCO = PANEL
+                    AZUL = GRAFITO
+                    AZUL_BOTON = AMARILLO
+                    AZUL_CLARO = AMARILLO
+                    GRIS = SECUNDARIO
+                    self.colores_actuales = tuple(colores)
+                    self.oscuro = GRAFITO
+                    self.color = AMARILLO
+                    self.claro = AMARILLO
+        except (mysql.connector.Error, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+    def pantalla_personalizado(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Temas y apariencia",
+            "Elige una identidad visual para el sistema. Cada tema se guarda en la cuenta activa y no modifica los datos de MySQL."
+        )
+
+        paletas = {
+            "Institucional": (
+                "#F1F5F9", "#FFFFFF", "#0D3B66", "#1565C0", "#00A6C7",
+                "#A855F7", "#1E293B", "#64748B", "#FFFFFF"
+            ),
+            "Cyberpunk 2077": (
+                "#070B18", "#111A2E", "#050816", "#FFE600", "#00F0FF",
+                "#FF3CAC", "#FFFFFF", "#D6E2F0", "#1D2942"
+            ),
+            "Océano": (
+                "#EAF4F8", "#FFFFFF", "#123B52", "#087EAB", "#27C2D1",
+                "#5265C8", "#183447", "#668394", "#F5FBFD"
+            ),
+            "Bosque": (
+                "#EEF4EC", "#FFFFFF", "#203B2B", "#347A45", "#7CBF70",
+                "#C18B45", "#203128", "#718174", "#F7FAF5"
+            ),
+            "Atardecer": (
+                "#FFF3EA", "#FFFFFF", "#552C3B", "#D85B42", "#F29B62",
+                "#A84E83", "#402B32", "#8B7077", "#FFFAF6"
+            ),
+            "Violeta": (
+                "#F3EFFA", "#FFFFFF", "#34264F", "#7652B5", "#43BFC2",
+                "#D66BAA", "#30283D", "#82758F", "#FBF8FF"
+            )
+        }
+
+        tema_actual = None
+        for nombre_tema, colores_tema in paletas.items():
+            if tuple(self.colores_actuales) == tuple(colores_tema):
+                tema_actual = nombre_tema
+                break
+
+        descripciones = {
+            "Institucional": "Formal, claro y profesional",
+            "Cyberpunk 2077": "Neón intenso · oscuro · futurista",
+            "Océano": "Azules frescos y tonos acuáticos",
+            "Bosque": "Verdes naturales y tranquilos",
+            "Atardecer": "Tonos cálidos y modernos",
+            "Violeta": "Morados elegantes con acentos brillantes"
+        }
+
+        panel_temas = tk.Frame(self.contenido, bg=FONDO)
+        panel_temas.pack(fill="x", pady=(0, 12))
+        for columna in range(3):
+            panel_temas.columnconfigure(columna, weight=1, uniform="tema")
+
+        for indice, (nombre_tema, colores_tema) in enumerate(paletas.items()):
+            fondo, panel_color, grafito, acento, cian, magenta, texto, secundario, entrada = colores_tema
+            seleccionado = nombre_tema == tema_actual
+            cyberpunk = nombre_tema == "Cyberpunk 2077"
+            borde_tarjeta = (
+                "#00F0FF" if cyberpunk and seleccionado else
+                "#FFE600" if cyberpunk else
+                acento if seleccionado else secundario
+            )
+            tarjeta = tk.Frame(
+                panel_temas, bg=panel_color, padx=14, pady=13,
+                highlightbackground=borde_tarjeta,
+                highlightthickness=3 if seleccionado else (2 if cyberpunk else 1)
+            )
+            tarjeta.grid(
+                row=indice // 3, column=indice % 3,
+                sticky="nsew", padx=6, pady=6
+            )
+
+            tk.Label(
+                tarjeta, text=nombre_tema, bg=panel_color, fg=texto,
+                font=("Segoe UI", 12, "bold")
+            ).pack(anchor="w")
+            tk.Label(
+                tarjeta, text=descripciones[nombre_tema], bg=panel_color,
+                fg=secundario, font=("Segoe UI", 9)
+            ).pack(anchor="w", pady=(3, 10))
+
+            
+            color_marco = "#00F0FF" if cyberpunk else grafito
+            muestra = tk.Frame(
+                tarjeta, bg=fondo, padx=9, pady=9,
+                highlightbackground=color_marco,
+                highlightthickness=2 if cyberpunk else 1
+            )
+            muestra.pack(fill="x", pady=(0, 11))
+            barra_muestra = tk.Frame(
+                muestra, bg=acento if cyberpunk else grafito, height=25
+            )
+            barra_muestra.pack(fill="x")
+            barra_muestra.pack_propagate(False)
+            tk.Label(
+                barra_muestra, text="CECyTEM  //  NIGHT CITY" if cyberpunk else "CECyTEM",
+                bg=acento if cyberpunk else grafito,
+                fg="#050816" if cyberpunk else "#FFFFFF",
+                font=("Segoe UI", 8, "bold")
+            ).pack(side="left", padx=8)
+
+            contenido_muestra = tk.Frame(
+                muestra, bg=panel_color, padx=8, pady=8,
+                highlightbackground=cian if cyberpunk else panel_color,
+                highlightthickness=1 if cyberpunk else 0
+            )
+            contenido_muestra.pack(fill="x", pady=(6, 0))
+            tk.Label(
+                contenido_muestra, text="Vista general", bg=panel_color,
+                fg=texto, font=("Segoe UI", 9, "bold")
+            ).pack(anchor="w")
+            fila_muestras = tk.Frame(contenido_muestra, bg=panel_color)
+            fila_muestras.pack(fill="x", pady=(7, 2))
+            for color_muestra in (acento, cian, magenta):
+                tk.Frame(
+                    fila_muestras, bg=color_muestra, height=13
+                ).pack(side="left", fill="x", expand=True, padx=2)
+
+            color_texto_boton = "#050816" if cyberpunk else "#FFFFFF"
+            tk.Button(
+                tarjeta,
+                text="✓ Tema activo" if seleccionado else "Aplicar tema",
+                command=lambda c=colores_tema: self.aplicar_colores(c),
+                bg=acento, fg=color_texto_boton,
+                activebackground=cian, activeforeground=grafito,
+                font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
+                cursor="hand2", padx=12, pady=8
+            ).pack(anchor="e")
+
+        panel_custom = tk.Frame(
+            self.contenido, bg=PANEL, padx=18, pady=16,
+            highlightbackground=SECUNDARIO, highlightthickness=1
+        )
+        panel_custom.pack(fill="x", pady=8)
+        tk.Label(
+            panel_custom, text="Personalización avanzada", bg=PANEL, fg=TEXTO,
+            font=("Segoe UI", 13, "bold")
+        ).pack(anchor="w", pady=(0, 4))
+        tk.Label(
+            panel_custom, text="También puedes ajustar los nueve colores manualmente.",
+            bg=PANEL, fg=SECUNDARIO, font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(0, 10))
+
+        definiciones = [
+            ("Fondo general", "fondo"),
+            ("Tarjetas y paneles", "panel"),
+            ("Barra y menú", "grafito"),
+            ("Color principal", "amarillo"),
+            ("Cian", "cian"),
+            ("Magenta", "magenta"),
+            ("Texto principal", "texto"),
+            ("Texto secundario", "secundario"),
+            ("Campos de entrada", "entrada")
+        ]
+        valores_actuales = dict(zip(
+            ("fondo", "panel", "grafito", "amarillo", "cian", "magenta",
+             "texto", "secundario", "entrada"),
+            self.colores_actuales
+        ))
+        self.colores_personalizados = {}
+
+        for etiqueta, clave in definiciones:
+            fila = tk.Frame(panel_custom, bg=PANEL)
+            fila.pack(fill="x", pady=4)
+            tk.Label(fila, text=etiqueta, bg=PANEL, fg=TEXTO,
+                     font=("Segoe UI", 9)).pack(side="left")
+            muestra = tk.Label(
+                fila, text=valores_actuales[clave], bg=valores_actuales[clave],
+                fg="#FFFFFF" if clave in ("grafito", "magenta") else "#111111",
+                width=13, relief="flat", padx=5, pady=4
+            )
+            muestra.pack(side="right", padx=8)
+            self.colores_personalizados[clave] = muestra
+
+            def elegir(k=clave, widget=muestra):
+                color = colorchooser.askcolor(
+                    color=widget.cget("bg"), title="Selecciona un color"
+                )
+                if color and color[1]:
+                    widget.configure(text=color[1], bg=color[1])
+
+            self.boton(fila, "Elegir color", elegir).pack(side="right")
+
+        def aplicar_custom():
+            claves = ("fondo", "panel", "grafito", "amarillo", "cian",
+                      "magenta", "texto", "secundario", "entrada")
+            colores = tuple(self.colores_personalizados[k].cget("bg") for k in claves)
+            self.aplicar_colores(colores)
+
+        self.boton(panel_custom, "Aplicar colores personalizados", aplicar_custom).pack(anchor="e", pady=(12, 0))
+
+        self.boton(
+            self.contenido, "Restablecer tema institucional",
+            lambda: self.aplicar_colores(paletas["Institucional"]),
+            color=SECUNDARIO
+        ).pack(anchor="w", pady=8)
+
+    def aplicar_colores(self, colores, guardar=True, mostrar_mensaje=True):
+        global FONDO, PANEL, GRAFITO, AMARILLO, CIAN, MAGENTA
+        global TEXTO, SECUNDARIO, ENTRADA, BLANCO, AZUL, AZUL_BOTON
+        global AZUL_CLARO, GRIS
+        if len(colores) == 6:
+            fondo, oscuro, acento, seleccionado, texto, panel = colores
+            colores = (
+                fondo, panel, oscuro, acento, "#00E5FF", "#FF2BD6",
+                texto, "#A8A8B8", panel
+            )
+        if len(colores) != 9:
+            messagebox.showerror("Colores inválidos", "El tema debe contener nueve colores.")
+            return
+        (FONDO, PANEL, GRAFITO, AMARILLO, CIAN, MAGENTA,
+         TEXTO, SECUNDARIO, ENTRADA) = tuple(colores)
+        BLANCO = PANEL
+        AZUL = GRAFITO
+        AZUL_BOTON = AMARILLO
+        AZUL_CLARO = AMARILLO
+        GRIS = SECUNDARIO
+        self.colores_actuales = tuple(colores)
+        self.oscuro = GRAFITO
+        self.color = AMARILLO
+        self.claro = AMARILLO
+        try:
+            self.configurar_estilos()
+            self.root.configure(bg=FONDO)
+            if self.usuario:
+                self.mostrar_sistema()
+                if guardar:
+                    self.guardar_colores_usuario(colores)
+                self.ir("Personalizado")
+            if mostrar_mensaje:
+                mensaje = "Los colores se aplicaron correctamente."
+                if guardar and self.usuario:
+                    mensaje += "\\nSe guardaron para esta cuenta."
+                messagebox.showinfo("Personalización aplicada", mensaje)
+        except tk.TclError as error:
+            messagebox.showerror("Error de apariencia", str(error))
+
+    def obtener_menu(self):
+        comunes = ["Importar Excel", "Gráficas"]
+        if self.rol == "docente":
+            return ["Inicio", "Pase de lista", "Mis grupos", "Reportes",
+                    "Alertas"] + comunes + ["Más opciones"]
+        return ["Inicio", "Panel directivo", "Alumnos", "Reportes",
+                "Alertas"] + comunes + ["Más opciones"]
+
+    def mostrar_sistema(self):
+        self.limpiar_root()
+
+        principal = tk.Frame(self.root, bg=FONDO)
+        principal.pack(fill="both", expand=True)
+
+        barra = tk.Frame(
+            principal, bg=self.oscuro, height=58
+        )
+        barra.pack(fill="x")
+        barra.pack_propagate(False)
+
+        self.boton_menu_movil = self.boton(
+            barra, "Menú", self._abrir_menu_movil, color=self.oscuro
+        )
+
+        self.etiqueta_marca = tk.Label(
+            barra, text="NEZAHUALCÓYOTL",
+            bg=self.oscuro, fg=BLANCO,
+            font=("Segoe UI", 17, "bold")
+        )
+        self.etiqueta_marca.pack(side="left", padx=18)
+
+        self.etiqueta_usuario_barra = tk.Label(
+            barra,
+            text=f"{self.rol.capitalize()}: {self.nombre}",
+            bg=self.oscuro, fg=BLANCO
+        )
+        self.etiqueta_usuario_barra.pack(side="left", padx=10)
+
+        self.botones_campanas = {}
+        for gravedad, estilo in COLORES_ALERTA.items():
+            campana = tk.Button(
+                barra, text=f"{estilo['icono']} 0",
+                command=lambda g=gravedad: self.abrir_alertas_gravedad(g),
+                bg=estilo["fuerte"], fg="#FFFFFF",
+                activebackground=estilo["fuerte"], activeforeground="#FFFFFF",
+                relief="flat", bd=0,
+                font=("Segoe UI", 9, "bold"), cursor="hand2", padx=7
+            )
+            campana.pack(side="right", padx=2, pady=9)
+            self.botones_campanas[gravedad] = campana
+        if self._temporizador_campana is not None:
+            try:
+                self.root.after_cancel(self._temporizador_campana)
+            except tk.TclError:
+                pass
+            self._temporizador_campana = None
+        self.actualizar_campana()
+
+        self.boton(
+            barra, "Salir", self.cerrar_sesion
+        ).pack(side="right", padx=5, pady=9)
+
+        cuerpo = tk.Frame(principal, bg=FONDO)
+        cuerpo.pack(fill="both", expand=True)
+
+        menu = tk.Frame(
+            cuerpo, bg=self.oscuro, width=210
+        )
+        menu.pack(side="left", fill="y")
+        menu.pack_propagate(False)
+        self.menu_lateral = menu
+
+        tk.Label(
+            menu, text="MENÚ PRINCIPAL",
+            bg=self.oscuro, fg=BLANCO,
+            font=("Segoe UI", 10, "bold")
+        ).pack(fill="x", padx=12, pady=15)
+
+        menu_canvas = tk.Canvas(
+            menu, bg=self.oscuro, highlightthickness=0
+        )
+        menu_scroll = ttk.Scrollbar(
+            menu, orient="vertical",
+            command=menu_canvas.yview
+        )
+        menu_interior = tk.Frame(menu_canvas, bg=self.oscuro)
+
+        menu_interior.bind(
+            "<Configure>",
+            lambda e: menu_canvas.configure(
+                scrollregion=menu_canvas.bbox("all")
+            )
+        )
+
+        menu_canvas.create_window(
+            (0, 0), window=menu_interior, anchor="nw", width=190
+        )
+        menu_canvas.configure(yscrollcommand=menu_scroll.set)
+
+        menu_canvas.pack(side="left", fill="both", expand=True)
+        menu_scroll.pack(side="right", fill="y")
+
+        self.botones_menu = {}
+        for opcion in self.obtener_menu():
+            boton_menu = tk.Button(
+                menu_interior,
+                text=opcion,
+                command=lambda n=opcion: self.ir(n),
+                bg=AMARILLO if opcion == self.vista_actual else self.oscuro,
+                fg=GRAFITO if opcion == self.vista_actual else BLANCO,
+                activebackground=CIAN,
+                activeforeground=GRAFITO,
+                font=("Segoe UI", 10, "bold" if opcion == self.vista_actual else "normal"),
+                relief="flat", anchor="w",
+                cursor="hand2", padx=12, pady=10, bd=0
+            )
+            boton_menu.pack(fill="x", padx=5, pady=2)
+            self.botones_menu[opcion] = boton_menu
+
+        area = tk.Frame(cuerpo, bg=FONDO)
+        area.pack(side="left", fill="both", expand=True)
+        self.area_principal = area
+
+        self.area_canvas = tk.Canvas(
+            area, bg=FONDO, highlightthickness=0
+        )
+        barra_scroll = ttk.Scrollbar(
+            area, orient="vertical",
+            command=self.area_canvas.yview
+        )
+
+        self.area_canvas.configure(
+            yscrollcommand=barra_scroll.set
+        )
+
+        barra_scroll.pack(side="right", fill="y")
+        self.area_canvas.pack(side="left", fill="both", expand=True)
+
+        self.contenido = tk.Frame(
+            self.area_canvas, bg=FONDO, padx=16, pady=16
+        )
+
+        self.ventana_contenido = self.area_canvas.create_window(
+            (0, 0), window=self.contenido, anchor="nw"
+        )
+
+        self.contenido.bind(
+            "<Configure>",
+            lambda e: self.area_canvas.configure(
+                scrollregion=self.area_canvas.bbox("all")
+            )
+        )
+
+        self.area_canvas.bind(
+            "<Configure>",
+            lambda e: self.area_canvas.itemconfigure(
+                self.ventana_contenido, width=e.width
+            )
+        )
+
+        self.ir("Inicio")
+        self._modo_movil = None
+        self._programar_ajuste_responsivo()
+        self.root.bind("<Configure>", self._programar_ajuste_responsivo)
+
+    def obtener_alertas_clasificadas(self):
+        """Clasifica pendientes y escala a Crítica por gravedad o acumulación."""
+        if self.rol == "director":
+            registros = self.consultar("""
+                SELECT id, tipo, alumno, grupo, fecha, registrado_por, detalle, gravedad, estado
+                FROM registros_escolares
+                WHERE estado='Pendiente'
+                  AND LOWER(tipo) IN ('conducta','reporte','incidencia','autocontrol')
+                ORDER BY fecha DESC, id DESC
+            """)
+        else:
+            registros = self.consultar("""
+                SELECT id, tipo, alumno, grupo, fecha, registrado_por, detalle, gravedad, estado
+                FROM registros_escolares
+                WHERE estado='Pendiente' AND registrado_por=%s
+                  AND LOWER(tipo) IN ('conducta','reporte','incidencia','autocontrol')
+                ORDER BY fecha DESC, id DESC
+            """, (self.usuario,))
+
+        grupos = {}
+        for registro in registros:
+            clave = (str(registro.get("alumno", "")).strip().casefold(),
+                     str(registro.get("grupo", "")).strip().casefold())
+            grupos.setdefault(clave, []).append(registro)
+
+        criticos = set()
+        for clave, elementos in grupos.items():
+            altas = sum(1 for x in elementos if str(x.get("gravedad", "")).casefold() == "alta")
+            tiene_critica = any(str(x.get("gravedad", "")).casefold() == "crítica" for x in elementos)
+            acumulacion_grave = altas >= 3 or (altas >= 2 and len(elementos) >= 4)
+            if tiene_critica or acumulacion_grave:
+                criticos.add(clave)
+
+        for registro in registros:
+            clave = (str(registro.get("alumno", "")).strip().casefold(),
+                     str(registro.get("grupo", "")).strip().casefold())
+            registro["gravedad_mostrada"] = "Crítica" if clave in criticos else registro.get("gravedad", "Baja")
+        return registros, criticos
+
+    def actualizar_campana(self):
+        """Actualiza los cuatro contadores; Crítica cuenta alumnos escalados."""
+        botones = getattr(self, "botones_campanas", {})
+        if not botones:
+            return
+        temporizador = getattr(self, "_temporizador_campana", None)
+        if temporizador is not None:
+            try:
+                self.root.after_cancel(temporizador)
+            except tk.TclError:
+                pass
+            self._temporizador_campana = None
+        try:
+            registros, criticos = self.obtener_alertas_clasificadas()
+            cantidades = {"Baja": 0, "Media": 0, "Alta": 0, "Crítica": len(criticos)}
+            for registro in registros:
+                nivel = registro.get("gravedad_mostrada", "Baja")
+                if nivel != "Crítica" and nivel in cantidades:
+                    cantidades[nivel] += 1
+            for gravedad, boton in botones.items():
+                if boton.winfo_exists():
+                    estilo = COLORES_ALERTA[gravedad]
+                    boton.configure(
+                        text=f"{estilo['icono']} {cantidades.get(gravedad, 0)}",
+                        bg=estilo["fuerte"], fg="#FFFFFF",
+                        activebackground=estilo["fuerte"], activeforeground="#FFFFFF"
+                    )
+        except (mysql.connector.Error, tk.TclError, KeyError):
+            pass
+        try:
+            if any(b.winfo_exists() for b in botones.values()):
+                self._temporizador_campana = self.root.after(10000, self.actualizar_campana)
+        except tk.TclError:
+            pass
+
+
+    def abrir_alertas_gravedad(self, gravedad):
+        self.vista_actual = "Alertas"
+        self.limpiar_contenido()
+        self.pantalla_alertas(gravedad)
+
+    def cerrar_sesion(self):
+        if messagebox.askyesno(
+            "Cerrar sesión", "¿Quieres salir de tu cuenta?"
+        ):
+            if self._temporizador_campana is not None:
+                try:
+                    self.root.after_cancel(self._temporizador_campana)
+                except tk.TclError:
+                    pass
+                self._temporizador_campana = None
+            self.usuario = ""
+            self.nombre = ""
+            self.rol = ""
+            self.mostrar_login()
+
+    def ir(self, nombre):
+        solo_director = {
+            "Justificantes", "Reportes generales", "Carta compromiso",
+            "Creación de usuarios", "Alumnos", "Panel directivo",
+            "Administrar usuarios", "Administrar grupos", "Administrar grupos y usuarios",
+            "Asignar docentes", "Consultar alumnos", "Consultar reportes",
+            "Monitoreo docente"
+        }
+        solo_docente = {
+            "Mis grupos", "Pase de lista", "Registrar retardo/falta",
+            "Conducta docente", "Autocontrol", "Registrar incidencia",
+            "Justificantes docente", "Mis reportes"
+        }
+
+        if nombre in solo_director and self.rol != "director":
+            messagebox.showwarning("Acceso restringido", "Esta pantalla es exclusiva de dirección.")
+            return
+        if nombre in solo_docente and self.rol != "docente":
+            messagebox.showwarning("Acceso restringido", "Esta pantalla es exclusiva de docentes.")
+            return
+
+        self.vista_actual = nombre
+        for opcion, boton_menu in getattr(self, "botones_menu", {}).items():
+            seleccionado = opcion == nombre
+            boton_menu.configure(
+                bg=AMARILLO if seleccionado else self.oscuro,
+                fg=GRAFITO if seleccionado else BLANCO,
+                font=("Segoe UI", 10, "bold" if seleccionado else "normal")
+            )
+
+        self.limpiar_contenido()
+        vistas = {
+            "Inicio": self.pantalla_inicio,
+            "Más opciones": self.pantalla_mas_opciones,
+            "Alumnos": self.pantalla_alumnos_admin,
+            "Reportes": self.pantalla_reportes if self.rol == "docente" else self.pantalla_reportes_generales,
+            "Mis grupos": self.pantalla_grupos,
+            "Pase de lista": self.pantalla_pase_lista,
+            "Registrar retardo/falta": self.pantalla_retardos,
+            "Conducta docente": self.pantalla_conducta,
+            "Autocontrol": self.pantalla_autocontrol,
+            "Registrar incidencia": self.pantalla_incidencia,
+            "Justificantes docente": self.pantalla_justificantes,
+            "Mis reportes": self.pantalla_reportes,
+            "Retardos y faltas": self.pantalla_director_retardos_faltas,
+            "Conducta": self.pantalla_director_conducta,
+            "Justificantes": self.pantalla_director_justificantes,
+            "Reportes generales": self.pantalla_reportes_generales,
+            "Carta compromiso": self.pantalla_carta,
+            "Creación de usuarios": self.pantalla_usuarios,
+            "Consultar reportes": self.pantalla_reportes,
+            "Panel directivo": self.pantalla_directivo,
+            "Administrar usuarios": self.pantalla_usuarios,
+            "Administrar grupos": self.pantalla_grupos_admin,
+            "Administrar grupos y usuarios": self.pantalla_admin_grupos_usuarios,
+            "Asignar docentes": self.pantalla_asignar,
+            "Consultar alumnos": self.pantalla_alumnos_admin,
+            "Monitoreo docente": self.pantalla_monitoreo,
+            "Gráficos": self.pantalla_graficas,
+            "Gráficas": self.pantalla_graficas,
+            "Personalizado": self.pantalla_personalizado,
+            "Buscar": self.pantalla_buscar,
+            "Avisos": self.pantalla_avisos,
+            "Alertas": self.pantalla_alertas,
+            "Excel (Importar/Exportar)": self.pantalla_excel,
+            "Importar Excel": self.pantalla_excel
+        }
+        vistas.get(nombre, self.pantalla_inicio)()
