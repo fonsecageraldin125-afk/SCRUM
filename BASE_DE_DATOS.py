@@ -1,3 +1,4 @@
+'''
 CREATE DATABASE IF NOT EXISTS cecytem CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE cecytem;
 
@@ -98,3 +99,9 @@ INSERT IGNORE INTO grupos_escolares (nombre) VALUES
 
 INSERT INTO usuarios (nombre, usuario, password_hash, rol)
 VALUES ('Director General', 'director', 'CambiaEsto123!', 'director');
+
+'''
+
+'''
+ESTE CODIGO FUE REALIZADO POR DENISE
+'''
