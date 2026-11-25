@@ -1,3 +1,4 @@
+#letty
 import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
 import mysql.connector
@@ -1362,3 +1363,120 @@ class SistemaNezahualcoyotl:
             "Importar Excel": self.pantalla_excel
         }
         vistas.get(nombre, self.pantalla_inicio)()
+
+#Zuri Naomi
+    def consultar(self, sql, parametros=(), diccionario=True):
+        conexion = conectar()
+        try:
+            cursor = conexion.cursor(dictionary=diccionario)
+            cursor.execute(sql, parametros)
+            return cursor.fetchall()
+        finally:
+            conexion.close()
+
+    def contar(self, tipo=None, estado=None):
+        sql = "SELECT COUNT(*) AS total FROM registros_escolares"
+        condiciones = []
+        parametros = []
+
+        if tipo:
+            condiciones.append("tipo=%s")
+            parametros.append(tipo)
+
+        if estado:
+            condiciones.append("estado=%s")
+            parametros.append(estado)
+
+        if self.rol == "docente":
+            condiciones.append("registrado_por=%s")
+            parametros.append(self.usuario)
+
+        if condiciones:
+            sql += " WHERE " + " AND ".join(condiciones)
+
+        filas = self.consultar(sql, parametros)
+        return filas[0]["total"]
+
+    def tarjeta(self, padre, encabezado, valor, detalle=""):
+        tarjeta = tk.Frame(
+            padre, bg=PANEL, padx=16, pady=14,
+            highlightbackground=SECUNDARIO,
+            highlightthickness=1
+        )
+        tk.Frame(tarjeta, bg=AMARILLO, height=4).pack(fill="x", pady=(0, 9))
+        tarjeta.pack(
+            side="left", fill="both", expand=True, padx=5
+        )
+
+        tk.Label(
+            tarjeta, text=encabezado,
+            bg=PANEL, fg=SECUNDARIO,
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w")
+
+        tk.Label(
+            tarjeta, text=str(valor),
+            bg=PANEL, fg=TEXTO,
+            font=("Segoe UI", 25, "bold")
+        ).pack(anchor="w", pady=5)
+
+        if detalle:
+            tk.Label(
+                tarjeta, text=detalle,
+                bg=PANEL, fg=SECUNDARIO,
+                wraplength=220, justify="left",
+                font=("Segoe UI", 9)
+            ).pack(anchor="w")
+
+    def pantalla_mas_opciones(self):
+        self.limpiar_contenido()
+        self.titulo("Más opciones", "Herramientas secundarias de CECyTEM.")
+        if self.rol == "docente":
+            opciones = [
+                ("Registrar retardo o falta", "Registrar retardo/falta"),
+                ("Registrar conducta", "Conducta docente"),
+                ("Registrar autocontrol", "Autocontrol"),
+                ("Registrar incidencia", "Registrar incidencia"),
+                ("Justificantes", "Justificantes docente"),
+                ("Buscar alumnos", "Buscar"),
+                ("Temas y apariencia", "Personalizado")
+            ]
+        else:
+            opciones = [
+                ("Justificantes", "Justificantes"),
+                ("Carta compromiso", "Carta compromiso"),
+                ("Administrar grupos y usuarios", "Administrar grupos y usuarios"),
+                ("Asignar docentes", "Asignar docentes"),
+                ("Temas y apariencia", "Personalizado")
+            ]
+        panel = tk.Frame(self.contenido, bg=FONDO)
+        panel.pack(fill="both", expand=True)
+        for indice, (etiqueta, destino) in enumerate(opciones):
+            fila, columna = divmod(indice, 2)
+            tarjeta = tk.Frame(panel, bg=BLANCO, padx=12, pady=12,
+                               highlightbackground=CIAN, highlightthickness=1)
+            tarjeta.grid(row=fila, column=columna, sticky="nsew", padx=6, pady=6)
+            tk.Label(tarjeta, text=etiqueta, bg=BLANCO, fg=self.oscuro,
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+            self.boton(tarjeta, "Abrir", lambda d=destino: self.ir(d)).pack(anchor="e")
+        for columna in range(2):
+            panel.columnconfigure(columna, weight=1)
+
+    def pantalla_admin_grupos_usuarios(self):
+        self.limpiar_contenido()
+        self.titulo("Administrar grupos y usuarios",
+                    "Selecciona qué apartado deseas administrar.")
+        contenedor = tk.Frame(self.contenido, bg=FONDO)
+        contenedor.pack(fill="x", pady=10)
+        for titulo, descripcion, destino in [
+            ("Administrar grupos", "Crear, editar y organizar los grupos escolares.", "Administrar grupos"),
+            ("Administrar usuarios", "Crear y administrar cuentas de docentes y dirección.", "Administrar usuarios")
+        ]:
+            tarjeta = tk.Frame(contenedor, bg=BLANCO, padx=18, pady=16,
+                               highlightbackground=CIAN, highlightthickness=1)
+            tarjeta.pack(fill="x", pady=7)
+            tk.Label(tarjeta, text=titulo, bg=BLANCO, fg=self.oscuro,
+                     font=("Segoe UI", 12, "bold")).pack(anchor="w")
+            tk.Label(tarjeta, text=descripcion, bg=BLANCO, fg=SECUNDARIO,
+                     wraplength=700, justify="left").pack(anchor="w", pady=5)
+            self.boton(tarjeta, "Abrir", lambda d=destino: self.ir(d)).pack(anchor="e")
