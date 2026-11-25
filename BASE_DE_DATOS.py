@@ -1,32 +1,28 @@
-CREATE DATABASE IF NOT EXISTS cecytem
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
-
+CREATE DATABASE IF NOT EXISTS cecytem CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE cecytem;
 
 CREATE TABLE IF NOT EXISTS usuarios (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    nombre VARCHAR(100) NOT NULL,
-    usuario VARCHAR(50) NOT NULL UNIQUE,
+    nombre VARCHAR(150) NOT NULL,
+    usuario VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    rol ENUM('docente', 'director') NOT NULL
-);
+    rol VARCHAR(20) NOT NULL,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS grupos_escolares (
     id INT AUTO_INCREMENT PRIMARY KEY,
     nombre VARCHAR(30) NOT NULL UNIQUE,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS docente_grupos (
     id INT AUTO_INCREMENT PRIMARY KEY,
     docente VARCHAR(100) NOT NULL,
     grupo_id INT NOT NULL,
     UNIQUE KEY asignacion_unica (docente, grupo_id),
-    FOREIGN KEY (grupo_id)
-        REFERENCES grupos_escolares(id)
-        ON DELETE CASCADE
-);
+    FOREIGN KEY (grupo_id) REFERENCES grupos_escolares(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS alumnos_escolares (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -35,10 +31,8 @@ CREATE TABLE IF NOT EXISTS alumnos_escolares (
     nombre VARCHAR(150) NOT NULL,
     activo BOOLEAN DEFAULT TRUE,
     UNIQUE KEY alumno_lista (grupo_id, numero_lista),
-    FOREIGN KEY (grupo_id)
-        REFERENCES grupos_escolares(id)
-        ON DELETE CASCADE
-);
+    FOREIGN KEY (grupo_id) REFERENCES grupos_escolares(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS asistencias_escolares (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -50,11 +44,9 @@ CREATE TABLE IF NOT EXISTS asistencias_escolares (
     observaciones TEXT,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY asistencia_diaria (alumno_id, fecha),
-    FOREIGN KEY (alumno_id)
-        REFERENCES alumnos_escolares(id),
-    FOREIGN KEY (grupo_id)
-        REFERENCES grupos_escolares(id)
-);
+    FOREIGN KEY (alumno_id) REFERENCES alumnos_escolares(id),
+    FOREIGN KEY (grupo_id) REFERENCES grupos_escolares(id)
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS registros_escolares (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -67,10 +59,11 @@ CREATE TABLE IF NOT EXISTS registros_escolares (
     accion VARCHAR(150),
     evidencia VARCHAR(500),
     seguimiento BOOLEAN DEFAULT FALSE,
+    gravedad VARCHAR(20) NOT NULL DEFAULT 'Baja',
     estado VARCHAR(40) DEFAULT 'Pendiente',
     registrado_por VARCHAR(100) NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS decisiones_directivas (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -81,7 +74,7 @@ CREATE TABLE IF NOT EXISTS decisiones_directivas (
     estado VARCHAR(40) DEFAULT 'Pendiente',
     director VARCHAR(100) NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS cartas_compromiso (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -92,9 +85,16 @@ CREATE TABLE IF NOT EXISTS cartas_compromiso (
     fecha DATE,
     director VARCHAR(100) NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS preferencias_usuario (
+    usuario VARCHAR(100) PRIMARY KEY,
+    colores JSON NOT NULL,
+    actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
 
 INSERT IGNORE INTO grupos_escolares (nombre) VALUES
-('1A'), ('1B'), ('1C'),
-('2A'), ('2B'), ('2C'),
-('3A'), ('3B'), ('3C');
+('1A'), ('1B'), ('1C'), ('2A'), ('2B'), ('2C'), ('3A'), ('3B'), ('3C');
+
+INSERT INTO usuarios (nombre, usuario, password_hash, rol)
+VALUES ('Director General', 'director', 'CambiaEsto123!', 'director');
