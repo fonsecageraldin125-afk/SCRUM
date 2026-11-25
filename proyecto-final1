@@ -1480,3 +1480,455 @@ class SistemaNezahualcoyotl:
             tk.Label(tarjeta, text=descripcion, bg=BLANCO, fg=SECUNDARIO,
                      wraplength=700, justify="left").pack(anchor="w", pady=5)
             self.boton(tarjeta, "Abrir", lambda d=destino: self.ir(d)).pack(anchor="e")
+#samadhi pantallas
+    def pantalla_inicio(self):
+        self.titulo(
+            "Panel de inicio",
+            f"Bienvenido/a, {self.nombre}. "
+            "Selecciona una sección para continuar."
+        )
+
+        fila = tk.Frame(self.contenido, bg=FONDO)
+        fila.pack(fill="x", pady=8)
+
+        try:
+            total = self.contar()
+            incidencias = self.contar("Incidencia")
+            pendientes = self.contar(estado="Pendiente")
+        except mysql.connector.Error:
+            total = incidencias = pendientes = "—"
+#samadhi Cayetano Fonseca:tabla incidencaia
+        for titulo, valor, detalle in [
+            ("Registros", total, "Registros guardados"),
+            ("Incidencias", incidencias, "Incidencias registradas"),
+            ("Pendientes", pendientes, "Por revisar")
+        ]:
+            self.tarjeta(fila, titulo, valor, detalle)
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=18, pady=18)
+        panel.pack(fill="x", pady=15)
+
+        tk.Label(
+            panel, text="Accesos rápidos",
+            bg=BLANCO, fg=self.oscuro,
+            font=("Segoe UI", 15, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+
+        accesos = (
+            ["Pase de lista", "Registrar incidencia",
+             "Mis reportes", "Gráficos"]
+            if self.rol == "docente"
+            else ["Retardos y faltas", "Conducta",
+                  "Reportes generales", "Creación de usuarios"]
+        )
+
+       
+        rejilla = tk.Frame(panel, bg=BLANCO)
+        rejilla.pack(anchor="center", pady=4)
+
+        for indice, acceso in enumerate(accesos):
+            boton_acceso = self.boton(
+                rejilla, acceso,
+                lambda a=acceso: self.ir(a)
+            )
+            boton_acceso.configure(width=22, pady=12)
+            boton_acceso.grid(
+                row=indice // 2, column=indice % 2,
+                padx=8, pady=7, sticky="ew"
+            )
+
+        for columna in range(2):
+            rejilla.grid_columnconfigure(columna, weight=1, uniform="accesos")
+
+        tk.Label(
+            self.contenido,
+            text=f"Fecha actual: {date.today().strftime('%d/%m/%Y')}  |  "
+                 "Usa el menú lateral para acceder a todas las funciones.",
+            bg=FONDO, fg=GRIS
+        ).pack(anchor="w", pady=(4, 0))
+
+    
+
+    def pantalla_usuarios(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Administrar usuarios",
+            "Crea cuentas de docentes y directores."
+        )
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=20, pady=18)
+        panel.pack(fill="x")
+        panel.columnconfigure(1, weight=1)
+
+        self.campos = {}
+
+        for i, campo in enumerate(
+            ["Nombre completo", "Usuario", "Contraseña", "Rol"]
+        ):
+            tk.Label(
+                panel, text=campo,
+                bg=BLANCO, fg=TEXTO,
+                font=("Segoe UI", 10, "bold")
+            ).grid(row=i, column=0, sticky="w", padx=8, pady=8)
+
+            if campo == "Rol":
+                widget = ttk.Combobox(
+                    panel, values=["docente", "director"],
+                    state="readonly"
+                )
+                widget.set("docente")
+            elif campo == "Contraseña":
+                widget = ttk.Entry(panel, show="*")
+            else:
+                widget = ttk.Entry(panel)
+
+            widget.grid(row=i, column=1, sticky="ew", padx=8, pady=8)
+            self.campos[campo] = widget
+
+        self.boton(
+            panel, "Crear cuenta", self.crear_usuario
+        ).grid(row=4, column=1, sticky="e", padx=8, pady=12)
+
+        self.boton(
+            self.contenido, "Ver usuarios",
+            lambda: self.mostrar_tabla(
+                "Usuarios",
+                """SELECT nombre, usuario, rol
+                   FROM usuarios ORDER BY nombre"""
+            )
+        ).pack(anchor="w", pady=12)
+
+    def crear_usuario(self):
+        nombre = self.leer_campo("Nombre completo")
+        usuario = self.leer_campo("Usuario")
+        password = self.leer_campo("Contraseña")
+        rol = self.leer_campo("Rol").lower()
+
+        if not nombre or not usuario or not password or rol not in (
+            "docente", "director"
+        ):
+            messagebox.showwarning(
+                "Datos incompletos",
+                "Completa todos los campos y selecciona un rol válido."
+            )
+            return
+
+
+        hash_password = generar_hash_password(password)
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+
+            cursor.execute(
+                "SELECT usuario FROM usuarios WHERE usuario=%s",
+                (usuario,)
+            )
+
+            if cursor.fetchone():
+                messagebox.showwarning(
+                    "Usuario existente",
+                    "Ya existe una cuenta con ese nombre de usuario."
+                )
+                return
+
+            cursor.execute("""
+                INSERT INTO usuarios (nombre, usuario, password_hash, rol)
+                VALUES (%s, %s, %s, %s)
+            """, (nombre, usuario, hash_password, rol))
+
+            conexion.commit()
+
+            messagebox.showinfo(
+                "Cuenta creada",
+                f"Se creó la cuenta de {nombre} con rol {rol}."
+            )
+
+            for campo in ("Nombre completo", "Usuario", "Contraseña"):
+                self.campos[campo].delete(0, "end")
+
+        except mysql.connector.Error as error:
+            messagebox.showerror(
+                "Error al crear cuenta",
+                f"{error}\n\n"
+                "Comprueba las columnas de tu tabla usuarios."
+            )
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    
+    def obtener_grupos(self):
+        return self.consultar("""
+            SELECT id, nombre
+            FROM grupos_escolares
+            ORDER BY nombre
+        """)
+
+    def obtener_mis_grupos(self):
+        if self.rol == "director":
+            return self.obtener_grupos()
+
+        return self.consultar("""
+            SELECT g.id, g.nombre
+            FROM grupos_escolares g
+            INNER JOIN docente_grupos dg ON dg.grupo_id=g.id
+            WHERE dg.docente=%s
+            ORDER BY g.nombre
+        """, (self.usuario,))
+
+    def pantalla_grupos_admin(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Administrar grupos",
+            "Crea grupos escolares y administra listas con tantos alumnos como necesites."
+        )
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=18, pady=18)
+        panel.pack(fill="x")
+
+        tk.Label(
+            panel, text="Nombre del nuevo grupo",
+            bg=BLANCO, fg=TEXTO
+        ).pack(anchor="w")
+
+        entrada = ttk.Entry(panel)
+        entrada.pack(fill="x", pady=8)
+
+        def crear_grupo():
+            nombre = entrada.get().strip().upper()
+
+            if not nombre:
+                messagebox.showwarning(
+                    "Grupo vacío", "Escribe un nombre de grupo."
+                )
+                return
+
+            conexion = None
+            try:
+                conexion = conectar()
+                cursor = conexion.cursor()
+                cursor.execute("""
+                    INSERT INTO grupos_escolares (nombre)
+                    VALUES (%s)
+                """, (nombre,))
+                conexion.commit()
+                messagebox.showinfo(
+                    "Grupo creado",
+                    f"El grupo {nombre} ya está disponible."
+                )
+                entrada.delete(0, "end")
+            except mysql.connector.IntegrityError:
+                messagebox.showwarning(
+                    "Grupo existente",
+                    "Ese grupo ya está registrado."
+                )
+            except mysql.connector.Error as error:
+                messagebox.showerror("Error MySQL", str(error))
+            finally:
+                if conexion is not None and conexion.is_connected():
+                    conexion.close()
+
+        self.boton(panel, "Crear grupo", crear_grupo).pack(anchor="e")
+
+        self.boton(
+            self.contenido, "Asignar docentes",
+            lambda: self.ir("Asignar docentes")
+        ).pack(anchor="w", pady=10)
+
+        self.mostrar_tabla(
+            "Grupos disponibles",
+            """SELECT g.nombre AS grupo,
+                      COUNT(a.id) AS alumnos
+               FROM grupos_escolares g
+               LEFT JOIN alumnos_escolares a
+                 ON a.grupo_id=g.id AND a.activo=TRUE
+               GROUP BY g.id, g.nombre
+               ORDER BY g.nombre"""
+        )
+
+    def pantalla_asignar(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Asignar docentes",
+            "Relaciona un docente con uno o varios grupos."
+        )
+#Leticia Alexa Silva Velasco
+        try:
+            docentes = self.consultar("""
+                SELECT usuario, nombre
+                FROM usuarios
+                WHERE LOWER(rol)='docente'
+                ORDER BY nombre
+            """)
+
+            grupos = self.obtener_grupos()
+
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+
+        if not docentes or not grupos:
+            tk.Label(
+                self.contenido,
+                text="Primero crea al menos un docente y un grupo.",
+                bg=FONDO, fg=GRIS
+            ).pack(anchor="w")
+            return
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=18, pady=18)
+        panel.pack(fill="x")
+
+        tk.Label(
+            panel, text="Docente",
+            bg=BLANCO, fg=TEXTO
+        ).pack(anchor="w")
+
+        mapa_docentes = {
+            f"{d['nombre']} ({d['usuario']})": d["usuario"]
+            for d in docentes
+        }
+
+        docente = ttk.Combobox(
+            panel, values=list(mapa_docentes), state="readonly"
+        )
+        docente.pack(fill="x", pady=6)
+
+        tk.Label(
+            panel, text="Grupo",
+            bg=BLANCO, fg=TEXTO
+        ).pack(anchor="w")
+
+        mapa_grupos = {
+            g["nombre"]: g["id"] for g in grupos
+        }
+
+        grupo = ttk.Combobox(
+            panel, values=list(mapa_grupos), state="readonly"
+        )
+        grupo.pack(fill="x", pady=6)
+
+        def asignar():
+            if not docente.get() or not grupo.get():
+                messagebox.showwarning(
+                    "Datos incompletos",
+                    "Selecciona un docente y un grupo."
+                )
+                return
+
+            conexion = None
+            try:
+                conexion = conectar()
+                cursor = conexion.cursor()
+                cursor.execute("""
+                    INSERT IGNORE INTO docente_grupos
+                    (docente, grupo_id)
+                    VALUES (%s, %s)
+                """, (
+                    mapa_docentes[docente.get()],
+                    mapa_grupos[grupo.get()]
+                ))
+                conexion.commit()
+
+                messagebox.showinfo(
+                    "Asignación guardada",
+                    "El docente ya puede consultar la lista del grupo."
+                )
+
+            except mysql.connector.Error as error:
+                messagebox.showerror("Error MySQL", str(error))
+
+            finally:
+                if conexion is not None and conexion.is_connected():
+                    conexion.close()
+
+        self.boton(panel, "Asignar grupo", asignar).pack(anchor="e")
+
+        self.mostrar_tabla(
+            "Asignaciones actuales",
+            """SELECT u.nombre AS docente, g.nombre AS grupo
+               FROM docente_grupos dg
+               INNER JOIN usuarios u ON u.usuario=dg.docente
+               INNER JOIN grupos_escolares g ON g.id=dg.grupo_id
+               ORDER BY u.nombre, g.nombre"""
+        )
+
+    def pantalla_grupos(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Mis grupos",
+            "Selecciona un grupo para consultar y administrar sus alumnos."
+        )
+
+        try:
+            grupos = self.obtener_mis_grupos()
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+
+        if not grupos:
+            tk.Label(
+                self.contenido,
+                text="Todavía no tienes grupos asignados. "
+                     "Solicita a dirección que te asigne uno.",
+                bg=FONDO, fg=GRIS, wraplength=750
+            ).pack(anchor="w")
+            return
+
+        for grupo in grupos:
+            panel = tk.Frame(
+                self.contenido, bg=BLANCO, padx=18, pady=15
+            )
+            panel.pack(fill="x", pady=6)
+
+            try:
+                cantidad = self.consultar("""
+                    SELECT COUNT(*) AS total
+                    FROM alumnos_escolares
+                    WHERE grupo_id=%s AND activo=TRUE
+                """, (grupo["id"],))[0]["total"]
+            except mysql.connector.Error:
+                cantidad = 0
+
+            tk.Label(
+                panel,
+                text=f"Grupo {grupo['nombre']}  ·  {cantidad} alumnos",
+                bg=BLANCO, fg=self.oscuro,
+                font=("Segoe UI", 13, "bold")
+            ).pack(side="left")
+
+            self.boton(
+                panel, "Abrir lista",
+                lambda g=grupo: self.abrir_alumnos(g)
+            ).pack(side="right")
+
+    def abrir_alumnos(self, grupo):
+        """Editor de lista sin límite fijo de 30 lugares."""
+        self.grupo_seleccionado = grupo
+        self.limpiar_contenido()
+        self.titulo(
+            f"Lista del grupo {grupo['nombre']}",
+            "Agrega nuevos apartados o elimina alumnos de la lista activa. El historial se conserva."
+        )
+
+        try:
+            alumnos = self.consultar("""
+                SELECT id, numero_lista, nombre
+                FROM alumnos_escolares
+                WHERE grupo_id=%s AND activo=TRUE
+                ORDER BY numero_lista
+            """, (grupo["id"],))
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=14, pady=14)
+        panel.pack(fill="x")
+        self.alumnos_lista = []
+        self.alumnos_eliminados = set()
+        ultimo_numero = max([a["numero_lista"] for a in alumnos], default=0)
+        cantidad_inicial = max(30, ultimo_numero)
+        self.ultimo_numero_lista = cantidad_inicial
