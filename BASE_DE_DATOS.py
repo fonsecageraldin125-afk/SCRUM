@@ -103,5 +103,6 @@ VALUES ('Director General', 'director', 'CambiaEsto123!', 'director');
 '''
 
 '''
-ESTE CODIGO FUE REALIZADO POR DENISE
+ESTE CODIGO FUE REALIZADO POR DENISE GERALDIN
+
 '''
