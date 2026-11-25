@@ -1756,7 +1756,7 @@ class SistemaNezahualcoyotl:
             "Asignar docentes",
             "Relaciona un docente con uno o varios grupos."
         )
-#Leticia Alexa Silva Velasco
+
         try:
             docentes = self.consultar("""
                 SELECT usuario, nombre
@@ -1932,3 +1932,2028 @@ class SistemaNezahualcoyotl:
         ultimo_numero = max([a["numero_lista"] for a in alumnos], default=0)
         cantidad_inicial = max(30, ultimo_numero)
         self.ultimo_numero_lista = cantidad_inicial
+#leonardo complementa codigo
+        def agregar_apartado(numero=None, nombre=""):
+            if numero is None:
+                self.ultimo_numero_lista += 1
+                numero = self.ultimo_numero_lista
+            fila = tk.Frame(panel, bg=BLANCO)
+            fila.pack(fill="x", pady=3)
+            tk.Label(
+                fila, text=f"{numero:02d}.", bg=BLANCO, fg=GRIS,
+                width=5, anchor="w"
+            ).pack(side="left")
+            entrada = ttk.Entry(fila)
+            entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
+            if nombre:
+                entrada.insert(0, nombre)
+            def eliminar_apartado():
+                if not messagebox.askyesno(
+                    "Eliminar alumno de la lista",
+                    f"¿Deseas eliminar el apartado {numero} de la lista del grupo {grupo['nombre']}?\n\n"
+                    "El alumno dejará de aparecer en la lista activa. Su historial se conservará."
+                ):
+                    return
+                self.alumnos_eliminados.add(numero)
+                self.alumnos_lista[:] = [item for item in self.alumnos_lista if item[0] != numero]
+                fila.destroy()
+
+            tk.Button(
+                fila, text="Eliminar", command=eliminar_apartado,
+                bg="#DC2626", fg="#FFFFFF", activebackground="#B91C1C",
+                activeforeground="#FFFFFF", relief="flat", cursor="hand2",
+                padx=10
+            ).pack(side="right")
+            self.alumnos_lista.append((numero, entrada))
+
+        por_numero = {a["numero_lista"]: a for a in alumnos}
+        for numero in range(1, cantidad_inicial + 1):
+            existente = por_numero.get(numero)
+            agregar_apartado(numero, existente["nombre"] if existente else "")
+
+        controles = tk.Frame(self.contenido, bg=FONDO)
+        controles.pack(fill="x", pady=8)
+        self.boton(
+            controles, "+ Agregar alumno", agregar_apartado
+        ).pack(side="left")
+        self.boton(
+            controles, "Guardar lista de alumnos", self.guardar_lista_alumnos
+        ).pack(side="right")
+        self.boton(
+            self.contenido, "Pasar lista",
+            lambda: self.ir("Pase de lista")
+        ).pack(anchor="e", pady=4)
+
+
+    def guardar_lista_alumnos(self):
+        grupo = self.grupo_seleccionado
+
+        if not grupo:
+            return
+
+        nombres = [
+            (numero, entrada.get().strip())
+            for numero, entrada in self.alumnos_lista
+        ]
+
+        nombres_ocupados = [n for _, n in nombres if n]
+
+        if len(nombres_ocupados) != len(set(
+            n.casefold() for n in nombres_ocupados
+        )):
+            messagebox.showwarning(
+                "Nombres repetidos",
+                "Revisa los nombres duplicados de la lista."
+            )
+            return
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+
+            for numero, nombre in nombres:
+                cursor.execute("""
+                    SELECT id
+                    FROM alumnos_escolares
+                    WHERE grupo_id=%s AND numero_lista=%s
+                """, (grupo["id"], numero))
+
+                existente = cursor.fetchone()
+
+                if nombre and existente:
+                    cursor.execute("""
+                        UPDATE alumnos_escolares
+                        SET nombre=%s, activo=TRUE
+                        WHERE id=%s
+                    """, (nombre, existente[0]))
+
+                elif nombre:
+                    cursor.execute("""
+                        INSERT INTO alumnos_escolares
+                        (grupo_id, numero_lista, nombre)
+                        VALUES (%s, %s, %s)
+                    """, (grupo["id"], numero, nombre))
+
+                elif existente:
+                    cursor.execute("""
+                        UPDATE alumnos_escolares
+                        SET activo=FALSE
+                        WHERE id=%s
+                    """, (existente[0],))
+
+            for numero in getattr(self, "alumnos_eliminados", set()):
+                cursor.execute("""
+                    UPDATE alumnos_escolares
+                    SET activo=FALSE
+                    WHERE grupo_id=%s AND numero_lista=%s
+                """, (grupo["id"], numero))
+
+            conexion.commit()
+
+            messagebox.showinfo(
+                "Lista guardada",
+                "Se guardaron los cambios. Los alumnos eliminados ya no aparecerán en la lista activa y su historial se conserva."
+            )
+
+        except mysql.connector.Error as error:
+            if conexion is not None:
+                conexion.rollback()
+            messagebox.showerror("Error al guardar", str(error))
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def pantalla_alumnos_admin(self):
+        self.mostrar_tabla(
+            "Alumnos registrados",
+            """SELECT g.nombre AS grupo, a.numero_lista,
+                      a.nombre AS alumno
+               FROM alumnos_escolares a
+               INNER JOIN grupos_escolares g ON g.id=a.grupo_id
+               WHERE a.activo=TRUE
+               ORDER BY g.nombre, a.numero_lista"""
+        )
+
+    
+    def pantalla_pase_lista(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Pase de lista",
+            "Edita los nombres, agrega o quita apartados y registra la asistencia. "
+            "La lista puede crecer según las necesidades del grupo."
+        )
+
+        try:
+            grupos = self.obtener_mis_grupos()
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+        if not grupos:
+            tk.Label(
+                self.contenido,
+                text="No tienes grupos asignados. Solicita a dirección una asignación.",
+                bg=FONDO, fg=GRIS
+            ).pack(anchor="w")
+            return
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=14, pady=12)
+        panel.pack(fill="x", pady=(0, 10))
+        tk.Label(panel, text="Grupo", bg=BLANCO, fg=TEXTO).pack(side="left", padx=(0, 8))
+        mapa = {g["nombre"]: g for g in grupos}
+        seleccion = ttk.Combobox(panel, values=list(mapa), state="readonly", width=13)
+        seleccion.pack(side="left")
+        seleccion.set(grupos[0]["nombre"])
+        tk.Label(panel, text="Fecha", bg=BLANCO, fg=TEXTO).pack(side="left", padx=(15, 5))
+        fecha = ttk.Entry(panel, width=12)
+        fecha.insert(0, date.today().isoformat())
+        fecha.pack(side="left")
+
+        contenedor = tk.Frame(self.contenido, bg=FONDO)
+        contenedor.pack(fill="both", expand=True)
+        encabezado = tk.Frame(contenedor, bg=self.oscuro, padx=8, pady=8)
+        encabezado.pack(fill="x")
+        for texto, ancho in [("N.º", 5), ("Alumno (editable)", 30), ("Acción / asistencia", 23), ("Detalle", 25), ("", 9)]:
+            tk.Label(encabezado, text=texto, bg=self.oscuro, fg=BLANCO,
+                     font=("Segoe UI", 9, "bold"), width=ancho, anchor="w").pack(side="left", padx=3)
+
+        lista = tk.Frame(contenedor, bg=FONDO)
+        lista.pack(fill="x")
+        filas = {}
+        eliminados = set()
+        opciones = ["Asistencia", "Falta", "Retardo", "Justificante", "Conducta", "Reporte", "Incidencia", "Autocontrol"]
+
+        def crear_fila(numero, alumno=None, anterior=None):
+            fila = tk.Frame(lista, bg=BLANCO, padx=7, pady=4,
+                            highlightbackground="#BFDBFE", highlightthickness=1)
+            fila.pack(fill="x", pady=1)
+            tk.Label(fila, text=f"{numero:02d}", bg=BLANCO, fg=self.oscuro,
+                     width=5, anchor="w", font=("Segoe UI", 9, "bold")).pack(side="left", padx=3)
+            entrada_nombre = ttk.Entry(fila)
+            entrada_nombre.pack(side="left", fill="x", expand=True, padx=3)
+            if alumno:
+                entrada_nombre.insert(0, alumno["nombre"])
+            estado_previo = anterior["estado"] if anterior else "Presente"
+            estado_inicial = "Asistencia" if estado_previo == "Presente" else estado_previo
+            accion = tk.StringVar(value=estado_inicial if estado_inicial in opciones else "Asistencia")
+            combo = ttk.Combobox(fila, textvariable=accion, values=opciones,
+                                 state="readonly", width=21)
+            combo.pack(side="left", padx=3)
+            detalle = ttk.Entry(fila)
+            detalle.pack(side="left", fill="x", expand=True, padx=3)
+            if anterior and anterior.get("observaciones"):
+                detalle.insert(0, anterior["observaciones"])
+
+            def quitar():
+                if not messagebox.askyesno("Quitar apartado", f"¿Quitar el lugar {numero} de esta lista? El historial anterior se conservará."):
+                    return
+                if alumno:
+                    eliminados.add(numero)
+                filas.pop(numero, None)
+                fila.destroy()
+
+            tk.Button(fila, text="Quitar", command=quitar, bg="#FEE2E2", fg="#991B1B",
+                      relief="flat", cursor="hand2", padx=7).pack(side="right", padx=3)
+            filas[numero] = {"nombre": entrada_nombre, "accion": accion,
+                             "detalle": detalle, "alumno": alumno}
+
+        def agregar_fila():
+            numero = max(list(filas.keys()) + list(eliminados), default=0) + 1
+            crear_fila(numero)
+
+        def cargar():
+            for widget in lista.winfo_children():
+                widget.destroy()
+            filas.clear()
+            eliminados.clear()
+            try:
+                datetime.strptime(fecha.get().strip(), "%Y-%m-%d")
+            except ValueError:
+                messagebox.showwarning("Fecha inválida", "Usa el formato AAAA-MM-DD.")
+                return
+            grupo = mapa[seleccion.get()]
+            try:
+                alumnos = self.consultar("""
+                    SELECT id, numero_lista, nombre
+                    FROM alumnos_escolares
+                    WHERE grupo_id=%s AND activo=TRUE
+                    ORDER BY numero_lista
+                """, (grupo["id"],))
+                anteriores = self.consultar("""
+                    SELECT alumno_id, estado, observaciones
+                    FROM asistencias_escolares
+                    WHERE grupo_id=%s AND fecha=%s
+                """, (grupo["id"], fecha.get().strip()))
+            except mysql.connector.Error as error:
+                messagebox.showerror("Error MySQL", str(error))
+                return
+            por_numero = {a["numero_lista"]: a for a in alumnos}
+            previos = {a["alumno_id"]: a for a in anteriores}
+            ultimo = max([a["numero_lista"] for a in alumnos], default=0)
+            for numero in range(1, max(30, ultimo) + 1):
+                alumno = por_numero.get(numero)
+                anterior = previos.get(alumno["id"]) if alumno else None
+                crear_fila(numero, alumno, anterior)
+            tk.Label(lista,
+                     text="Autocontrol inicia como Baja; Conducta e Incidencia como Media; Reporte como Alta. Puedes ajustar la gravedad en el siguiente paso.",
+                     bg=FONDO, fg=GRIS, wraplength=900, justify="left").pack(anchor="w", pady=8)
+
+        def guardar():
+            if seleccion.get() not in mapa:
+                messagebox.showwarning("Grupo inválido", "Selecciona un grupo válido.")
+                return
+            grupo = mapa[seleccion.get()]
+            try:
+                ids_permitidos = {g["id"] for g in self.obtener_mis_grupos()}
+            except mysql.connector.Error as error:
+                messagebox.showerror("Error MySQL", str(error))
+                return
+            if grupo["id"] not in ids_permitidos:
+                messagebox.showerror("Acceso restringido", "El grupo ya no está asignado a tu cuenta.")
+                return
+            fecha_texto = fecha.get().strip()
+            try:
+                datetime.strptime(fecha_texto, "%Y-%m-%d")
+            except ValueError:
+                messagebox.showwarning("Fecha inválida", "Usa el formato AAAA-MM-DD.")
+                return
+
+            conexion = None
+            incidencias_pendientes = []
+            try:
+                conexion = conectar()
+                cursor = conexion.cursor()
+                for numero in sorted(eliminados):
+                    cursor.execute("UPDATE alumnos_escolares SET activo=FALSE WHERE grupo_id=%s AND numero_lista=%s", (grupo["id"], numero))
+                for numero, datos in sorted(filas.items()):
+                    nombre = datos["nombre"].get().strip()
+                    if not nombre:
+                        cursor.execute("UPDATE alumnos_escolares SET activo=FALSE WHERE grupo_id=%s AND numero_lista=%s", (grupo["id"], numero))
+                        continue
+                    cursor.execute("SELECT id FROM alumnos_escolares WHERE grupo_id=%s AND numero_lista=%s", (grupo["id"], numero))
+                    existente = cursor.fetchone()
+                    if existente:
+                        alumno_id = existente[0]
+                        cursor.execute("UPDATE alumnos_escolares SET nombre=%s, activo=TRUE WHERE id=%s", (nombre, alumno_id))
+                    else:
+                        cursor.execute("INSERT INTO alumnos_escolares (grupo_id, numero_lista, nombre) VALUES (%s,%s,%s)", (grupo["id"], numero, nombre))
+                        alumno_id = cursor.lastrowid
+
+                    accion = datos["accion"].get()
+                    detalle = datos["detalle"].get().strip()
+                    if accion in ("Asistencia", "Falta", "Retardo", "Justificante"):
+                        estado = {"Asistencia": "Presente"}.get(accion, accion)
+                        cursor.execute("""INSERT INTO asistencias_escolares
+                            (alumno_id, grupo_id, fecha, estado, docente, observaciones)
+                            VALUES (%s,%s,%s,%s,%s,%s)
+                            ON DUPLICATE KEY UPDATE estado=VALUES(estado), docente=VALUES(docente), observaciones=VALUES(observaciones)""",
+                            (alumno_id, grupo["id"], fecha_texto, estado, self.usuario, detalle or None))
+                        if estado in ("Falta", "Retardo"):
+                            cursor.execute("""INSERT INTO registros_escolares
+                                (tipo, alumno, grupo, fecha, detalle, registrado_por)
+                                VALUES (%s,%s,%s,%s,%s,%s)""",
+                                (estado, nombre, grupo["nombre"], fecha_texto,
+                                 detalle or f"Estado de asistencia: {estado}", self.usuario))
+                    else:
+                        gravedad_inicial = {
+                            "Autocontrol": "Baja", "Conducta": "Media",
+                            "Incidencia": "Media", "Reporte": "Alta"
+                        }.get(accion, "Media")
+                        cursor.execute("""INSERT INTO registros_escolares
+                            (tipo, alumno, grupo, fecha, detalle, gravedad, registrado_por)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                            (accion, nombre, grupo["nombre"], fecha_texto,
+                             detalle or None, gravedad_inicial, self.usuario))
+                        if accion in ("Conducta", "Reporte", "Incidencia", "Autocontrol"):
+                            incidencias_pendientes.append({
+                                "id": cursor.lastrowid, "alumno": nombre,
+                                "grupo": grupo["nombre"], "fecha": fecha_texto,
+                                "tipo": accion, "detalle": detalle or ""
+                            })
+                conexion.commit()
+                messagebox.showinfo("Lista guardada", f"Se guardó la lista de {grupo['nombre']} para el {fecha_texto}.")
+                self.actualizar_campana()
+                if incidencias_pendientes:
+                    self.mostrar_detalles_incidencias_lista(incidencias_pendientes)
+                else:
+                    self.ir("Inicio")
+            except (mysql.connector.Error, ValueError) as error:
+                if conexion:
+                    conexion.rollback()
+                messagebox.showerror("Error al guardar", str(error))
+            finally:
+                if conexion is not None and conexion.is_connected():
+                    conexion.close()
+
+        controles = tk.Frame(self.contenido, bg=FONDO)
+        controles.pack(fill="x", pady=8)
+        self.boton(controles, "+ Agregar alumno", agregar_fila).pack(side="left")
+        self.boton(controles, "Cargar lista", cargar).pack(side="left", padx=8)
+        self.boton(self.contenido, "Guardar lista", guardar).pack(anchor="e", pady=12)
+        self.boton(self.contenido, "Registrar incidencia detallada", lambda: self.ir("Registrar incidencia")).pack(anchor="e", pady=(0, 10))
+        cargar()
+
+
+    def mostrar_detalles_incidencias_lista(self, incidencias, indice=0):
+        """Solicita detalles y gravedad uno por uno; los datos básicos ya vienen de la lista."""
+        if indice >= len(incidencias):
+            messagebox.showinfo("Incidencias completadas", "Se terminaron de capturar los detalles de todos los alumnos.")
+            self.ir("Inicio")
+            return
+
+        registro = incidencias[indice]
+        ventana = tk.Toplevel(self.root)
+        ventana.title(f"Detalle de incidencia {indice + 1} de {len(incidencias)}")
+        ventana.configure(bg=FONDO)
+        ventana.transient(self.root)
+        ventana.grab_set()
+        ventana.geometry("560x470")
+        ventana.resizable(True, True)
+
+        tk.Label(ventana, text=f"Alumno {indice + 1} de {len(incidencias)}",
+                 bg=FONDO, fg=self.oscuro, font=("Segoe UI", 16, "bold")).pack(anchor="w", padx=20, pady=(18, 10))
+        datos = tk.Frame(ventana, bg=BLANCO, padx=14, pady=12)
+        datos.pack(fill="x", padx=20, pady=5)
+        for etiqueta, valor in [
+            ("Alumno", registro["alumno"]), ("Grupo", registro["grupo"]),
+            ("Fecha", registro["fecha"]), ("Tipo", registro["tipo"]),
+            ("Registró", self.nombre or self.usuario)
+        ]:
+            tk.Label(datos, text=f"{etiqueta}: {valor}", bg=BLANCO, fg=TEXTO,
+                     font=("Segoe UI", 10, "bold" if etiqueta == "Alumno" else "normal")).pack(anchor="w", pady=2)
+
+        tk.Label(ventana, text="Gravedad", bg=FONDO, fg=TEXTO,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20, pady=(12, 3))
+        gravedad = ttk.Combobox(ventana, values=["Baja", "Media", "Alta", "Crítica"], state="readonly")
+        gravedad_inicial = {"Autocontrol": "Baja", "Conducta": "Media", "Incidencia": "Media", "Reporte": "Alta"}
+        gravedad.set(gravedad_inicial.get(registro.get("tipo"), "Media"))
+        gravedad.pack(fill="x", padx=20)
+        tk.Label(ventana, text="Detalles de lo ocurrido", bg=FONDO, fg=TEXTO,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20, pady=(12, 3))
+        detalle = tk.Text(ventana, height=5, wrap="word", bg=BLANCO, fg=TEXTO, relief="solid", bd=1)
+        detalle.pack(fill="both", expand=True, padx=20)
+        if registro.get("detalle"):
+            detalle.insert("1.0", registro["detalle"])
+
+        botones = tk.Frame(ventana, bg=FONDO)
+        botones.pack(fill="x", padx=20, pady=15)
+
+        def avanzar(guardar=True):
+            texto = detalle.get("1.0", "end").strip()
+            if guardar and not texto:
+                messagebox.showwarning("Falta el detalle", "Agrega una breve descripción para continuar.", parent=ventana)
+                return
+            conexion = None
+            try:
+                conexion = conectar()
+                cursor = conexion.cursor()
+                if guardar:
+                    cursor.execute("""UPDATE registros_escolares
+                        SET detalle=%s, gravedad=%s, estado='Pendiente'
+                        WHERE id=%s""", (texto, gravedad.get(), registro["id"]))
+                else:
+                    cursor.execute("""UPDATE registros_escolares
+                        SET gravedad=%s, estado='Pendiente' WHERE id=%s""",
+                        (gravedad.get(), registro["id"]))
+                conexion.commit()
+            except mysql.connector.Error as error:
+                if conexion:
+                    conexion.rollback()
+                messagebox.showerror("Error al guardar detalle", str(error), parent=ventana)
+                return
+            finally:
+                if conexion is not None and conexion.is_connected():
+                    conexion.close()
+            ventana.destroy()
+            self.actualizar_campana()
+            self.mostrar_detalles_incidencias_lista(incidencias, indice + 1)
+
+        tk.Button(botones, text="Omitir detalle", command=lambda: avanzar(False),
+                  bg="#E2E8F0", fg=TEXTO, relief="flat", padx=12, pady=8).pack(side="left")
+        tk.Button(botones, text="Guardar y siguiente", command=avanzar,
+                  bg=self.color, fg=BLANCO, relief="flat", padx=14, pady=8).pack(side="right")
+
+    def formulario(self, campos, tipo, boton_texto="Guardar"):
+        self.limpiar_contenido()
+        self.titulo(
+            self.vista_actual,
+            "Completa los datos y guarda el registro."
+        )
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=20, pady=18)
+        panel.pack(fill="x")
+        panel.columnconfigure(1, weight=1)
+
+        self.campos = {}
+
+        campos_texto = {
+            "Motivo detallado", "Descripción",
+            "Acción tomada", "Observaciones",
+            "Decisión / justificación", "Compromisos del alumno",
+            "Motivo"
+        }
+
+        opciones = {
+            "Grupo": self.nombres_mis_grupos(),
+            "Tipo de problema": [
+                "Autocontrol", "Conducta", "Conflicto", "Otro"
+            ],
+            "Tipo de acción": [
+                "Amonestación", "Citatorio Tutor",
+                "Suspensión Temporal", "Seguimiento Psicológico"
+            ],
+            "Estado": [
+                "Pendiente", "Revisado", "Resuelto", "Justificado"
+            ],
+            "Gravedad": ["Baja", "Media", "Alta", "Crítica"],
+            "Tipo de justificante": [
+                "Médico", "Familiar", "Académico", "Otro"
+            ]
+        }
+
+        for i, campo in enumerate(campos):
+            tk.Label(
+                panel, text=campo,
+                bg=BLANCO, fg=TEXTO,
+                font=("Segoe UI", 10, "bold"),
+                anchor="w"
+            ).grid(
+                row=i, column=0, sticky="nw",
+                padx=(0, 15), pady=8
+            )
+
+            if campo in campos_texto:
+                widget = tk.Text(
+                    panel, height=4, wrap="word",
+                    bg=self.claro, fg=TEXTO,
+                    font=("Segoe UI", 10), relief="flat"
+                )
+
+            elif campo in opciones:
+                valores = opciones[campo]
+
+                widget = ttk.Combobox(
+                    panel, values=valores,
+                    state="readonly" if valores else "disabled"
+                )
+
+                if campo == "Grupo" and valores:
+                    widget.set(valores[0])
+                elif campo == "Gravedad" and valores:
+                    widget.set("Media")
+
+            else:
+                widget = ttk.Entry(panel)
+
+                if campo == "Fecha":
+                    widget.insert(0, date.today().isoformat())
+
+                if campo == "Hora":
+                    widget.insert(
+                        0, datetime.now().strftime("%H:%M")
+                    )
+
+            widget.grid(
+                row=i, column=1, sticky="ew", pady=6
+            )
+            self.campos[campo] = widget
+
+        self.boton(
+            panel, boton_texto,
+            lambda: self.guardar_registro(tipo)
+        ).grid(
+            row=len(campos), column=1,
+            sticky="e", pady=(18, 0)
+        )
+
+    def nombres_mis_grupos(self):
+        try:
+            return [g["nombre"] for g in self.obtener_mis_grupos()]
+        except mysql.connector.Error:
+            return []
+
+    def guardar_registro(self, tipo):
+        alumno = self.leer_campo("Alumno")
+
+        if not alumno:
+            messagebox.showwarning(
+                "Campo obligatorio", "Escribe el nombre del alumno."
+            )
+            return
+
+        fecha = self.leer_campo("Fecha") or date.today().isoformat()
+        hora = self.leer_campo("Hora") or None
+
+        try:
+            datetime.strptime(fecha, "%Y-%m-%d")
+
+            if hora:
+                formato = "%H:%M:%S" if len(hora) == 8 else "%H:%M"
+                datetime.strptime(hora, formato)
+                if len(hora) == 5:
+                    hora += ":00"
+
+        except ValueError:
+            messagebox.showwarning(
+                "Fecha u hora incorrecta",
+                "Usa fecha AAAA-MM-DD y hora HH:MM."
+            )
+            return
+
+        grupo = self.leer_campo("Grupo")
+
+        if grupo and grupo not in self.nombres_mis_grupos():
+            messagebox.showerror(
+                "Grupo no autorizado",
+                "No tienes permiso para registrar información en ese grupo."
+            )
+            return
+        if "Grupo" in self.campos and not grupo:
+            messagebox.showwarning(
+                "Grupo obligatorio",
+                "Selecciona un grupo asignado antes de guardar."
+            )
+            return
+
+        detalle = next(
+            (
+                self.leer_campo(c) for c in (
+                    "Motivo detallado", "Descripción",
+                    "Observaciones", "Motivo",
+                    "Decisión / justificación"
+                ) if self.leer_campo(c)
+            ),
+            ""
+        )
+        accion = next(
+            (
+                self.leer_campo(c) for c in (
+                    "Tipo de acción", "Acción tomada",
+                    "Tipo de problema", "Tipo de justificante"
+                ) if self.leer_campo(c)
+            ),
+            ""
+        )
+
+        evidencia = (
+            self.leer_campo("Evidencia (ruta)")
+            or self.leer_campo("Archivo de evidencia")
+        )
+
+        seguimiento = (
+            self.leer_campo("Necesita seguimiento con tutor")
+            .lower() in ("si", "sí", "1", "true")
+        )
+        gravedad_por_tipo = {
+            "autocontrol": "Baja",
+            "conducta": "Media",
+            "incidencia": "Media",
+            "reporte": "Alta"
+        }
+        gravedad = self.leer_campo("Gravedad") or gravedad_por_tipo.get(tipo.lower(), "Baja")
+        if gravedad not in ("Baja", "Media", "Alta", "Crítica"):
+            gravedad = gravedad_por_tipo.get(tipo.lower(), "Baja")
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+
+            cursor.execute("""
+                INSERT INTO registros_escolares
+                (tipo, alumno, grupo, fecha, hora, detalle,
+                 accion, evidencia, seguimiento, gravedad, registrado_por)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                tipo, alumno, grupo or None, fecha, hora,
+                detalle or None, accion or None,
+                evidencia or None, seguimiento, gravedad, self.usuario
+            ))
+
+            conexion.commit()
+
+            messagebox.showinfo(
+                "Registro guardado",
+                f"Se guardó correctamente. Folio: {cursor.lastrowid}"
+            )
+            self.actualizar_campana()
+            self.ir("Inicio")
+
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def pantalla_retardos(self):
+        self.formulario(
+            ["Alumno", "Grupo", "Fecha", "Hora", "Observaciones"],
+            "Retardo/Falta", "Guardar registro"
+        )
+
+    def pantalla_conducta(self):
+        self.formulario(
+            ["Alumno", "Grupo", "Fecha",
+             "Tipo de problema", "Gravedad", "Motivo detallado",
+             "Acción tomada"],
+            "Conducta", "Guardar reporte"
+        )
+
+    def pantalla_autocontrol(self):
+        self.formulario(
+            ["Alumno", "Grupo", "Fecha", "Tipo de problema", "Gravedad",
+             "Descripción", "Acción tomada"],
+            "Autocontrol", "Guardar reporte"
+        )
+
+    def pantalla_incidencia(self):
+        self.formulario(
+            ["Alumno", "Grupo", "Fecha", "Hora", "Gravedad",
+             "Motivo detallado", "Evidencia (ruta)",
+             "Acción tomada"],
+            "Incidencia", "Guardar incidencia"
+        )
+
+    def pantalla_justificantes(self):
+        self.formulario(
+            ["Alumno", "Grupo", "Fecha",
+             "Tipo de justificante",
+             "Archivo de evidencia", "Observaciones"],
+            "Justificante", "Guardar justificante"
+        )
+
+
+    def mostrar_tabla(self, titulo, sql, parametros=()):
+        self.limpiar_contenido()
+        self.titulo(titulo, "Información consultada en MySQL.")
+
+        marco = tk.Frame(self.contenido, bg=BLANCO)
+        marco.pack(fill="both", expand=True)
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor(dictionary=True)
+            cursor.execute(sql, parametros)
+            filas = cursor.fetchall()
+
+            if not filas:
+                tk.Label(
+                    marco, text="No hay registros para mostrar.",
+                    bg=BLANCO, fg=GRIS, padx=15, pady=20
+                ).pack(anchor="w")
+                return
+
+            columnas = list(filas[0].keys())
+
+            tabla_marco = tk.Frame(marco, bg=BLANCO)
+            tabla_marco.pack(fill="both", expand=True)
+
+            tabla = ttk.Treeview(
+                tabla_marco, columns=columnas,
+                show="headings"
+            )
+
+            sy = ttk.Scrollbar(
+                tabla_marco, orient="vertical",
+                command=tabla.yview
+            )
+            sx = ttk.Scrollbar(
+                tabla_marco, orient="horizontal",
+                command=tabla.xview
+            )
+
+            tabla.configure(
+                yscrollcommand=sy.set,
+                xscrollcommand=sx.set
+            )
+
+            sy.pack(side="right", fill="y")
+            sx.pack(side="bottom", fill="x")
+            tabla.pack(fill="both", expand=True)
+
+            for columna in columnas:
+                tabla.heading(
+                    columna,
+                    text=columna.replace("_", " ").title()
+                )
+                tabla.column(
+                    columna, width=150,
+                    minwidth=90, stretch=True
+                )
+
+            for fila in filas:
+                tabla.insert(
+                    "", "end",
+                    values=[
+                        "" if v is None else str(v)
+                        for v in fila.values()
+                    ]
+                )
+
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error de consulta", str(error))
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def pantalla_reportes(self):
+        if self.rol == "docente":
+            self.mostrar_tabla(
+                "Mis reportes",
+                """SELECT id, tipo, alumno, grupo, fecha,
+                          estado, creado_en
+                   FROM registros_escolares
+                   WHERE registrado_por=%s
+                   ORDER BY creado_en DESC""",
+                (self.usuario,)
+            )
+        else:
+            self.mostrar_tabla(
+                "Consultar reportes",
+                """SELECT id, tipo, alumno, grupo, fecha,
+                          estado, registrado_por, creado_en
+                   FROM registros_escolares
+                   ORDER BY creado_en DESC"""
+            )
+
+    def pantalla_directivo(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Panel directivo",
+            "Resumen general de la actividad escolar."
+        )
+
+        distribucion = tk.Frame(self.contenido, bg=FONDO)
+        distribucion.pack(fill="both", expand=True, pady=8)
+
+        izquierda = tk.Frame(
+            distribucion, bg=AZUL, width=220, padx=14, pady=16
+        )
+        izquierda.pack(side="left", fill="y", padx=(0, 12))
+        izquierda.pack_propagate(False)
+
+        tk.Label(
+            izquierda, text="HERRAMIENTAS", bg=AZUL, fg=BLANCO,
+            font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", pady=(0, 12))
+
+        self.boton(
+            izquierda, "Importar Excel", lambda: self.ir("Excel (Importar/Exportar)"),
+            color=AZUL_BOTON
+        ).pack(fill="x", pady=5)
+        self.boton(
+            izquierda, "Exportar Excel", self.exportar_excel,
+            color=AZUL_BOTON
+        ).pack(fill="x", pady=5)
+        self.boton(
+            izquierda, "Ver gráficas", lambda: self.ir("Gráficas"),
+            color=AZUL_BOTON
+        ).pack(fill="x", pady=5)
+        self.boton(
+            izquierda, "Temas y apariencia", lambda: self.ir("Personalizado"),
+            color=AZUL_BOTON
+        ).pack(fill="x", pady=5)
+
+        derecha = tk.Frame(distribucion, bg=FONDO)
+        derecha.pack(side="left", fill="both", expand=True)
+
+        fila = tk.Frame(derecha, bg=FONDO)
+        fila.pack(fill="x", pady=(0, 8))
+
+        try:
+            total = self.contar()
+            incidencias = self.contar("Incidencia")
+            pendientes = self.contar(estado="Pendiente")
+        except mysql.connector.Error:
+            total = incidencias = pendientes = "—"
+
+        for encabezado, valor, detalle in [
+            ("Registros", total, "Actividad acumulada"),
+            ("Incidencias", incidencias, "Incidencias registradas"),
+            ("Pendientes", pendientes, "Requieren revisión")
+        ]:
+            self.tarjeta(fila, encabezado, valor, detalle)
+
+        self.boton(
+            derecha, "Consultar reportes",
+            lambda: self.ir("Consultar reportes")
+        ).pack(anchor="w", pady=(0, 8))
+
+        
+        panel_grupos = tk.Frame(
+            derecha, bg=BLANCO, padx=14, pady=14,
+            highlightbackground=CIAN, highlightthickness=1
+        )
+        panel_grupos.pack(fill="x", pady=(8, 12))
+
+        tk.Label(
+            panel_grupos, text="INCIDENCIAS POR GRUPO",
+            bg=BLANCO, fg=self.oscuro,
+            font=("Segoe UI", 13, "bold")
+        ).pack(anchor="w")
+        tk.Label(
+            panel_grupos,
+            text="Selecciona un grupo para consultar solamente sus incidencias, o abre el listado completo.",
+            bg=BLANCO, fg=GRIS, wraplength=760,
+            justify="left", font=("Segoe UI", 9)
+        ).pack(anchor="w", pady=(3, 10))
+
+        self.boton(
+            panel_grupos, "Ver todas las incidencias",
+            lambda: self.pantalla_incidencias_grupo(), color=AMARILLO
+        ).pack(anchor="w", pady=(0, 9))
+
+        rejilla_grupos = tk.Frame(panel_grupos, bg=BLANCO)
+        rejilla_grupos.pack(fill="x")
+        try:
+            grupos_disponibles = self.obtener_grupos()
+        except mysql.connector.Error as error:
+            grupos_disponibles = []
+            tk.Label(
+                rejilla_grupos,
+                text=f"No se pudieron cargar los grupos: {error}",
+                bg=BLANCO, fg="#DC2626", wraplength=700,
+                justify="left"
+            ).pack(anchor="w")
+
+        if grupos_disponibles:
+            for indice, grupo in enumerate(grupos_disponibles):
+                boton_grupo = self.boton(
+                    rejilla_grupos,
+                    str(grupo.get("nombre", "Grupo")),
+                    lambda g=grupo: self.pantalla_incidencias_grupo(g),
+                    color=AZUL_BOTON
+                )
+                boton_grupo.grid(
+                    row=indice // 3, column=indice % 3,
+                    padx=4, pady=4, sticky="ew"
+                )
+            for columna in range(3):
+                rejilla_grupos.grid_columnconfigure(columna, weight=1)
+        else:
+            tk.Label(
+                rejilla_grupos, text="Todavía no hay grupos registrados.",
+                bg=BLANCO, fg=GRIS, font=("Segoe UI", 10)
+            ).pack(anchor="w")
+
+        self.marco_graficas = None
+        self.grafica_tipo("Registros por tipo", padre=derecha)
+
+    def pantalla_incidencias_grupo(self, grupo=None):
+        """Abre incidencias filtradas por grupo o muestra todas las incidencias."""
+        tipos = "LOWER(tipo) IN ('conducta', 'reporte', 'incidencia', 'autocontrol')"
+        if grupo:
+            nombre_grupo = str(grupo.get("nombre", "Grupo"))
+            self.tabla_directiva_con_detalle(
+                f"Incidencias del grupo {nombre_grupo}",
+                f"""SELECT id, alumno, grupo, tipo, fecha, gravedad, detalle,
+                          accion, seguimiento, estado, registrado_por
+                   FROM registros_escolares
+                   WHERE {tipos} AND grupo=%s
+                   ORDER BY fecha DESC, creado_en DESC""",
+                (nombre_grupo,)
+            )
+        else:
+            self.tabla_directiva_con_detalle(
+                "Todas las incidencias",
+                f"""SELECT id, alumno, grupo, tipo, fecha, gravedad, detalle,
+                          accion, seguimiento, estado, registrado_por
+                   FROM registros_escolares
+                   WHERE {tipos}
+                   ORDER BY fecha DESC, creado_en DESC"""
+            )
+
+    def tabla_directiva_con_detalle(self, encabezado, sql, parametros=()):
+        self.limpiar_contenido()
+        self.titulo(encabezado, "Selecciona un registro para consultar el estatus y los detalles del alumno.")
+        marco = tk.Frame(self.contenido, bg=BLANCO, padx=10, pady=10)
+        marco.pack(fill="both", expand=True)
+
+        try:
+            filas = self.consultar(sql, parametros)
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+
+        if not filas:
+            tk.Label(marco, text="No hay registros para mostrar.", bg=BLANCO,
+                     fg=GRIS, font=("Segoe UI", 11)).pack(anchor="w", padx=8, pady=12)
+            return
+
+        columnas = list(filas[0].keys())
+        tabla = ttk.Treeview(marco, columns=columnas, show="headings", height=12)
+        sy = ttk.Scrollbar(marco, orient="vertical", command=tabla.yview)
+        sx = ttk.Scrollbar(marco, orient="horizontal", command=tabla.xview)
+        tabla.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        sy.pack(side="right", fill="y")
+        sx.pack(side="bottom", fill="x")
+        tabla.pack(fill="both", expand=True)
+
+        for columna in columnas:
+            tabla.heading(columna, text=columna.replace("_", " ").title())
+            tabla.column(columna, width=145, minwidth=90, stretch=True)
+
+        por_id = {}
+        for fila in filas:
+            iid = str(fila["id"])
+            tabla.insert("", "end", iid=iid,
+                         values=["" if v is None else str(v) for v in fila.values()])
+            por_id[iid] = fila
+
+        detalle = tk.Frame(marco, bg=self.claro, padx=14, pady=12)
+        detalle.pack(fill="x", pady=(10, 0))
+        etiqueta = tk.Label(detalle, text="Selecciona un alumno de la tabla para ver su información.",
+                            bg=self.claro, fg=self.oscuro, justify="left",
+                            anchor="w", wraplength=900, font=("Segoe UI", 10))
+        etiqueta.pack(fill="x")
+
+        def mostrar_detalle(event=None):
+            seleccion = tabla.selection()
+            if not seleccion:
+                return
+            fila = por_id.get(seleccion[0])
+            if fila:
+                campos = [
+                    f"{clave.replace('_', ' ').title()}: {valor if valor not in (None, '') else 'Sin información'}"
+                    for clave, valor in fila.items() if clave != "id"
+                ]
+                etiqueta.configure(text="\n".join(campos))
+
+        tabla.bind("<<TreeviewSelect>>", mostrar_detalle)
+
+    def pantalla_director_retardos_faltas(self):
+        self.tabla_directiva_con_detalle(
+            "Retardos y faltas",
+            """SELECT id, alumno, grupo, tipo, fecha, hora, estado, detalle,
+                      registrado_por
+               FROM registros_escolares
+               WHERE LOWER(tipo) IN ('retardo', 'falta', 'retardo/falta')
+               ORDER BY fecha DESC, creado_en DESC"""
+        )
+
+    def pantalla_director_conducta(self):
+        self.tabla_directiva_con_detalle(
+            "Conducta",
+            """SELECT id, alumno, grupo, tipo, fecha, gravedad, detalle, accion,
+                      seguimiento, estado, registrado_por
+               FROM registros_escolares
+               WHERE LOWER(tipo) IN ('conducta', 'incidencia', 'autocontrol')
+               ORDER BY fecha DESC, creado_en DESC"""
+        )
+
+    def pantalla_director_justificantes(self):
+        self.tabla_directiva_con_detalle(
+            "Justificantes",
+            """SELECT id, alumno, grupo, fecha, accion, detalle, evidencia,
+                      estado, registrado_por
+               FROM registros_escolares
+               WHERE LOWER(tipo)='justificante'
+               ORDER BY fecha DESC, creado_en DESC"""
+        )
+
+    def pantalla_reportes_generales(self):
+        self.mostrar_tabla(
+            "Reportes generales",
+            """SELECT id, tipo, alumno, grupo, fecha, hora, gravedad, estado, detalle,
+                      accion, registrado_por, creado_en
+               FROM registros_escolares
+               ORDER BY creado_en DESC"""
+        )
+
+    def pantalla_monitoreo(self):
+        self.mostrar_tabla(
+            "Monitoreo docente",
+            """SELECT registrado_por AS docente,
+                      COUNT(*) AS registros,
+                      SUM(tipo='Incidencia') AS incidencias,
+                      MAX(creado_en) AS ultimo_registro
+               FROM registros_escolares
+               GROUP BY registrado_por
+               ORDER BY registros DESC"""
+        )
+
+
+    def pantalla_alertas(self, gravedad=None):
+        """Muestra pendientes clasificados y seguimiento de alumnos acumulados."""
+        self.limpiar_contenido()
+        titulo = f"Alertas: {gravedad}" if gravedad else "Centro de alertas"
+        self.titulo(titulo, "Las alertas críticas se activan por una gravedad crítica o por acumulación de alertas altas.")
+        estilo_pantalla = COLORES_ALERTA.get(gravedad) if gravedad else None
+        if estilo_pantalla:
+            encabezado = tk.Frame(
+                self.contenido, bg=estilo_pantalla["fuerte"],
+                padx=16, pady=12, highlightthickness=2,
+                highlightbackground=estilo_pantalla["fuerte"]
+            )
+            encabezado.pack(fill="x", pady=(4, 10))
+            tk.Label(
+                encabezado, text=f"{estilo_pantalla['icono']}  ALERTAS {gravedad.upper()}",
+                bg=estilo_pantalla["fuerte"], fg="#FFFFFF",
+                font=("Segoe UI", 16, "bold")
+            ).pack(anchor="w")
+            tk.Label(
+                encabezado,
+                text="Esta pantalla conserva el color de su campanita aunque cambies el tema del sistema.",
+                bg=estilo_pantalla["fuerte"], fg="#FFFFFF",
+                font=("Segoe UI", 9, "bold")
+            ).pack(anchor="w", pady=(3, 0))
+        try:
+            registros, criticos = self.obtener_alertas_clasificadas()
+            if gravedad:
+                pendientes = [r for r in registros if r.get("gravedad_mostrada") == gravedad]
+            else:
+                pendientes = registros
+            if gravedad == "Crítica":
+                repetidos = [
+                    {"alumno": r.get("alumno"), "grupo": r.get("grupo"), "total": sum(
+                        1 for x in registros
+                        if str(x.get("alumno", "")).strip().casefold() == str(r.get("alumno", "")).strip().casefold()
+                        and str(x.get("grupo", "")).strip().casefold() == str(r.get("grupo", "")).strip().casefold()
+                    )}
+                    for r in pendientes
+                ]
+                vistos = set()
+                repetidos = [x for x in repetidos if not ((x["alumno"], x["grupo"]) in vistos or vistos.add((x["alumno"], x["grupo"]))) ]
+            else:
+                repetidos = []
+                for r in registros:
+                    clave = (str(r.get("alumno", "")).strip().casefold(), str(r.get("grupo", "")).strip().casefold())
+                    if clave in criticos:
+                        repetidos.append({"alumno": r.get("alumno"), "grupo": r.get("grupo"), "total": sum(1 for x in registros if (str(x.get("alumno", "")).strip().casefold(), str(x.get("grupo", "")).strip().casefold()) == clave)})
+                vistos = set()
+                repetidos = [x for x in repetidos if not ((x["alumno"], x["grupo"]) in vistos or vistos.add((x["alumno"], x["grupo"]))) ]
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error al consultar alertas", str(error))
+            return
+
+        resumen = tk.Frame(self.contenido, bg=FONDO)
+        resumen.pack(fill="x", pady=5)
+        self.tarjeta(resumen, "Pendientes", len(pendientes), "Registros por revisar")
+        self.tarjeta(resumen, "Alumnos críticos", len(criticos), "Acumulación o gravedad crítica")
+
+        if repetidos:
+            tk.Label(self.contenido, text="Alumnos en seguimiento crítico", bg=FONDO,
+                     fg=self.oscuro, font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(16, 6))
+            for fila in repetidos:
+                estilo_critico = COLORES_ALERTA["Crítica"]
+                tarjeta = tk.Frame(self.contenido, bg=estilo_critico["suave"], padx=12, pady=10,
+                                   highlightbackground=estilo_critico["fuerte"], highlightthickness=2)
+                tarjeta.pack(fill="x", pady=4)
+                tk.Label(tarjeta, text=f"{fila['alumno']} · Grupo {fila.get('grupo') or 'Sin grupo'}",
+                         bg=estilo_critico["suave"], fg=estilo_critico["texto"],
+                         font=("Segoe UI", 11, "bold")).pack(anchor="w")
+                tk.Label(tarjeta, text=f"{fila['total']} alertas pendientes asociadas",
+                         bg=estilo_critico["suave"], fg=estilo_critico["texto"],
+                         font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(3, 0))
+
+        tk.Label(self.contenido, text="Registros pendientes", bg=FONDO, fg=self.oscuro,
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(16, 6))
+        if pendientes:
+            for aviso in pendientes:
+                nivel = aviso.get("gravedad_mostrada", aviso.get("gravedad", "Baja"))
+                estilo_nivel = COLORES_ALERTA.get(nivel, COLORES_ALERTA["Baja"])
+                fondo_tarjeta = estilo_nivel["suave"] if gravedad else BLANCO
+                tarjeta = tk.Frame(self.contenido, bg=fondo_tarjeta, padx=12, pady=9,
+                                   highlightbackground=estilo_nivel["fuerte"], highlightthickness=2)
+                tarjeta.pack(fill="x", pady=4)
+                tk.Label(tarjeta, text=f"#{aviso['id']} · {aviso['tipo']} · {aviso['alumno']} · {nivel}",
+                         bg=fondo_tarjeta, fg=estilo_nivel["texto"],
+                         font=("Segoe UI", 10, "bold")).pack(anchor="w")
+                tk.Label(tarjeta, text=f"Grupo: {aviso.get('grupo') or '—'} | Fecha: {aviso['fecha']} | Registró: {aviso.get('registrado_por') or '—'}",
+                         bg=fondo_tarjeta, fg=estilo_nivel["texto"] if gravedad else GRIS).pack(anchor="w")
+                if aviso.get("detalle"):
+                    tk.Label(tarjeta, text=str(aviso["detalle"]), bg=fondo_tarjeta,
+                             fg=estilo_nivel["texto"] if gravedad else TEXTO,
+                             wraplength=900, justify="left").pack(anchor="w", pady=(3, 0))
+                if nivel == "Crítica":
+                    tk.Label(tarjeta, text="SEGUIMIENTO PRIORITARIO: alumno con acumulación de alertas graves.",
+                             bg=fondo_tarjeta, fg=estilo_nivel["texto"],
+                             font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(4, 0))
+                acciones = tk.Frame(tarjeta, bg=fondo_tarjeta)
+                acciones.pack(fill="x", pady=(7, 0))
+                tk.Button(acciones, text="Marcar como resuelta",
+                          command=lambda registro_id=aviso["id"]: self.resolver_incidencia(registro_id, gravedad),
+                          bg=estilo_nivel["fuerte"], fg="#FFFFFF",
+                          activebackground=estilo_nivel["fuerte"], activeforeground="#FFFFFF",
+                          relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
+                          font=("Segoe UI", 9, "bold")).pack(side="right")
+        else:
+            tk.Label(self.contenido, text="No hay registros pendientes en esta categoría.",
+                     bg=FONDO, fg=GRIS).pack(anchor="w")
+
+        
+        
+        
+        if estilo_pantalla:
+            color_fuerte = estilo_pantalla["fuerte"]
+            color_suave = estilo_pantalla["suave"]
+            color_tarjeta = "#FFFFFF"
+
+            if getattr(self, "area_canvas", None):
+                self.area_canvas.configure(bg=color_fuerte)
+            self.contenido.configure(bg=color_suave)
+
+            def colorear_superficie(widget):
+                try:
+                    fondo_widget = widget.cget("bg")
+                    if fondo_widget == FONDO:
+                        widget.configure(bg=color_suave)
+                    elif fondo_widget in (PANEL, BLANCO):
+                        widget.configure(bg=color_tarjeta)
+                except (tk.TclError, TypeError):
+                    pass
+                for hijo in widget.winfo_children():
+                    colorear_superficie(hijo)
+
+            colorear_superficie(self.contenido)
+            self.contenido.configure(bg=color_suave)
+
+
+    def resolver_incidencia(self, registro_id, gravedad=None):
+        """Marca el aviso como resuelto sin eliminar el registro del historial."""
+        if not messagebox.askyesno("Resolver incidencia",
+                                   "¿Confirmas que esta incidencia ya fue atendida?"):
+            return
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            if self.rol == "director":
+                cursor.execute(
+                    "UPDATE registros_escolares SET estado='Resuelto' WHERE id=%s AND estado='Pendiente'",
+                    (registro_id,)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE registros_escolares SET estado='Resuelto' WHERE id=%s AND registrado_por=%s AND estado='Pendiente'",
+                    (registro_id, self.usuario)
+                )
+            conexion.commit()
+            if cursor.rowcount == 0:
+                messagebox.showinfo("Sin cambios", "La incidencia ya no está pendiente o no tienes permiso para resolverla.")
+        except mysql.connector.Error as error:
+            if conexion:
+                conexion.rollback()
+            messagebox.showerror("No se pudo resolver", str(error))
+            return
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+        self.actualizar_campana()
+        self.pantalla_alertas(gravedad)
+
+    def pantalla_excel(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Importación y exportación de Excel",
+            "Carga listas de alumnos desde .xlsx y exporta reportes del sistema."
+        )
+        if not EXCEL_DISPONIBLE:
+            tk.Label(
+                self.contenido,
+                text="Instala la dependencia con: pip install openpyxl",
+                bg=FONDO, fg=ROJO, font=("Segoe UI", 11, "bold")
+            ).pack(anchor="w", pady=10)
+            return
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=16, pady=16)
+        panel.pack(fill="x", pady=8)
+        tk.Label(panel, text="Carga masiva de alumnos", bg=BLANCO,
+                 fg=self.oscuro, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(
+            panel,
+            text="La hoja debe llamarse Alumnos y contener las columnas Grupo, Numero_lista y Alumno.",
+            bg=BLANCO, fg=GRIS, wraplength=900, justify="left"
+        ).pack(anchor="w", pady=6)
+        self.boton(panel, "Descargar plantilla Excel", self.descargar_plantilla_excel).pack(anchor="w", pady=4)
+        self.boton(panel, "Importar alumnos desde Excel", self.importar_alumnos_excel).pack(anchor="w", pady=4)
+
+        panel_exportar = tk.Frame(self.contenido, bg=BLANCO, padx=16, pady=16)
+        panel_exportar.pack(fill="x", pady=8)
+        tk.Label(panel_exportar, text="Exportar información", bg=BLANCO,
+                 fg=self.oscuro, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(
+            panel_exportar,
+            text="Crea un libro con alumnos, asistencias y registros. Los docentes solo exportan los datos de sus grupos.",
+            bg=BLANCO, fg=GRIS, wraplength=900, justify="left"
+        ).pack(anchor="w", pady=6)
+        self.boton(panel_exportar, "Exportar información a Excel", self.exportar_excel).pack(anchor="w", pady=4)
+
+    def descargar_plantilla_excel(self):
+        if not EXCEL_DISPONIBLE:
+            messagebox.showerror("Falta openpyxl", "Ejecuta: pip install openpyxl")
+            return
+        ruta = filedialog.asksaveasfilename(
+            title="Guardar plantilla de alumnos", defaultextension=".xlsx",
+            filetypes=[("Libro de Excel", "*.xlsx")]
+        )
+        if not ruta:
+            return
+        libro = Workbook()
+        hoja = libro.active
+        hoja.title = "Alumnos"
+        hoja.append(["Grupo", "Numero_lista", "Alumno"])
+        hoja.append(["1A", 1, "Nombre completo del alumno"])
+        for celda in hoja[1]:
+            celda.font = Font(bold=True, color="FFFFFF")
+            celda.fill = PatternFill("solid", fgColor="0D3B66")
+        hoja.column_dimensions["A"].width = 18
+        hoja.column_dimensions["B"].width = 18
+        hoja.column_dimensions["C"].width = 38
+        try:
+            libro.save(ruta)
+            messagebox.showinfo("Plantilla creada", "La plantilla se guardó correctamente.")
+        except (OSError, PermissionError) as error:
+            messagebox.showerror("Error al guardar", str(error))
+
+    def importar_alumnos_excel(self):
+        if not EXCEL_DISPONIBLE:
+            messagebox.showerror("Falta openpyxl", "Ejecuta: pip install openpyxl")
+            return
+        ruta = filedialog.askopenfilename(
+            title="Selecciona el archivo Excel", filetypes=[("Libro de Excel", "*.xlsx")]
+        )
+        if not ruta:
+            return
+        try:
+            libro = load_workbook(ruta, read_only=True, data_only=True)
+            if "Alumnos" not in libro.sheetnames:
+                libro.close()
+                raise ValueError("El archivo debe incluir una hoja llamada Alumnos.")
+            hoja = libro["Alumnos"]
+            primera = next(hoja.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            encabezados = [str(x or "").strip().casefold() for x in (primera or ())]
+            requeridos = ("grupo", "numero_lista", "alumno")
+            if not all(x in encabezados for x in requeridos):
+                libro.close()
+                raise ValueError("Las columnas requeridas son Grupo, Numero_lista y Alumno.")
+            indices = {x: encabezados.index(x) for x in requeridos}
+            filas = []
+            for n_fila, valores in enumerate(hoja.iter_rows(min_row=2, values_only=True), start=2):
+                grupo = str(valores[indices["grupo"]] or "").strip().upper()
+                nombre = str(valores[indices["alumno"]] or "").strip()
+                numero_original = valores[indices["numero_lista"]]
+                if not grupo and not nombre and numero_original is None:
+                    continue
+                if not grupo or not nombre or numero_original is None:
+                    raise ValueError(f"Faltan datos en la fila {n_fila}.")
+                try:
+                    numero = int(numero_original)
+                except (ValueError, TypeError):
+                    raise ValueError(f"Numero_lista inválido en la fila {n_fila}.")
+                if numero < 1 or numero > 30:
+                    raise ValueError(f"El número de lista de la fila {n_fila} debe estar entre 1 y 30.")
+                filas.append((grupo, numero, nombre))
+            libro.close()
+            if not filas:
+                raise ValueError("No hay alumnos para importar.")
+            llaves = [(g, n) for g, n, _ in filas]
+            if len(llaves) != len(set(llaves)):
+                raise ValueError("Hay números de lista repetidos dentro de un mismo grupo.")
+        except (OSError, ValueError, TypeError, KeyError, IndexError, StopIteration) as error:
+            messagebox.showerror("Archivo no válido", str(error))
+            return
+
+        conexion = None
+        nuevos = 0
+        actualizados = 0
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor(dictionary=True)
+            grupos_docente = None
+            if self.rol == "docente":
+                cursor.execute("""
+                    SELECT g.nombre
+                    FROM grupos_escolares g
+                    INNER JOIN docente_grupos dg ON dg.grupo_id=g.id
+                    WHERE dg.docente=%s
+                """, (self.usuario,))
+                grupos_docente = {x["nombre"] for x in cursor.fetchall()}
+
+            for grupo, numero, nombre in filas:
+                if grupos_docente is not None and grupo not in grupos_docente:
+                    raise ValueError(f"No tienes asignado el grupo {grupo}; se canceló toda la importación.")
+                cursor.execute("SELECT id FROM grupos_escolares WHERE nombre=%s", (grupo,))
+                encontrado = cursor.fetchone()
+                if not encontrado:
+                    if self.rol != "director":
+                        raise ValueError(f"El grupo {grupo} no existe. Solicita a dirección que lo registre.")
+                    cursor.execute("INSERT INTO grupos_escolares (nombre) VALUES (%s)", (grupo,))
+                    grupo_id = cursor.lastrowid
+                else:
+                    grupo_id = encontrado["id"]
+                cursor.execute("""
+                    SELECT id FROM alumnos_escolares
+                    WHERE grupo_id=%s AND numero_lista=%s
+                """, (grupo_id, numero))
+                alumno = cursor.fetchone()
+                if alumno:
+                    cursor.execute(
+                        "UPDATE alumnos_escolares SET nombre=%s, activo=TRUE WHERE id=%s",
+                        (nombre, alumno["id"])
+                    )
+                    actualizados += 1
+                else:
+                    cursor.execute("""
+                        INSERT INTO alumnos_escolares
+                        (grupo_id, numero_lista, nombre, activo)
+                        VALUES (%s, %s, %s, TRUE)
+                    """, (grupo_id, numero, nombre))
+                    nuevos += 1
+            conexion.commit()
+            messagebox.showinfo(
+                "Importación completada",
+                f"Alumnos nuevos: {nuevos}\\\\nAlumnos actualizados: {actualizados}\\\\nTotal procesado: {len(filas)}"
+            )
+        except (mysql.connector.Error, ValueError) as error:
+            if conexion is not None:
+                conexion.rollback()
+            messagebox.showerror("Importación cancelada", str(error))
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def exportar_excel(self):
+        if not EXCEL_DISPONIBLE:
+            messagebox.showerror("Falta openpyxl", "Ejecuta: pip install openpyxl")
+            return
+        ruta = filedialog.asksaveasfilename(
+            title="Exportar información escolar", defaultextension=".xlsx",
+            filetypes=[("Libro de Excel", "*.xlsx")]
+        )
+        if not ruta:
+            return
+        conexion = None
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            libro = Workbook()
+            alumnos = libro.active
+            alumnos.title = "Alumnos"
+            alumnos.append(["Grupo", "Numero_lista", "Alumno", "Activo"])
+            sql = """
+                SELECT g.nombre, a.numero_lista, a.nombre, a.activo
+                FROM alumnos_escolares a
+                INNER JOIN grupos_escolares g ON g.id=a.grupo_id
+            """
+            params = ()
+            if self.rol == "docente":
+                sql += """
+                    INNER JOIN docente_grupos dg ON dg.grupo_id=g.id
+                    WHERE dg.docente=%s
+                """
+                params = (self.usuario,)
+            sql += " ORDER BY g.nombre, a.numero_lista"
+            cursor.execute(sql, params)
+            for fila in cursor.fetchall():
+                alumnos.append(list(fila))
+
+            asistencias = libro.create_sheet("Asistencias")
+            asistencias.append(["Alumno", "Grupo", "Fecha", "Estado", "Docente", "Observaciones"])
+            sql = """
+                SELECT a.nombre, g.nombre, x.fecha, x.estado, x.docente, x.observaciones
+                FROM asistencias_escolares x
+                INNER JOIN alumnos_escolares a ON a.id=x.alumno_id
+                INNER JOIN grupos_escolares g ON g.id=x.grupo_id
+            """
+            params = ()
+            if self.rol == "docente":
+                sql += " WHERE x.docente=%s"
+                params = (self.usuario,)
+            sql += " ORDER BY x.fecha DESC"
+            cursor.execute(sql, params)
+            for fila in cursor.fetchall():
+                asistencias.append(list(fila))
+
+            registros = libro.create_sheet("Registros")
+            registros.append(["ID", "Tipo", "Alumno", "Grupo", "Fecha", "Hora",
+                              "Detalle", "Accion", "Estado", "Registrado_por"])
+            sql = """
+                SELECT id, tipo, alumno, grupo, fecha, hora, detalle,
+                       accion, estado, registrado_por
+                FROM registros_escolares
+            """
+            params = ()
+            if self.rol == "docente":
+                sql += " WHERE registrado_por=%s"
+                params = (self.usuario,)
+            sql += " ORDER BY fecha DESC, id DESC"
+            cursor.execute(sql, params)
+            for fila in cursor.fetchall():
+                registros.append(list(fila))
+
+            for hoja in libro.worksheets:
+                hoja.freeze_panes = "A2"
+                hoja.auto_filter.ref = hoja.dimensions
+                for celda in hoja[1]:
+                    celda.font = Font(bold=True, color="FFFFFF")
+                    celda.fill = PatternFill("solid", fgColor="0D3B66")
+                for columna in hoja.columns:
+                    letra = columna[0].column_letter
+                    ancho = min(max(max(len(str(c.value or "")) for c in columna) + 2, 12), 42)
+                    hoja.column_dimensions[letra].width = ancho
+            libro.save(ruta)
+            messagebox.showinfo(
+                "Exportación completada",
+                "Se exportaron alumnos, asistencias y registros a un libro Excel."
+            )
+        except (mysql.connector.Error, OSError, PermissionError) as error:
+            messagebox.showerror("Error de exportación", str(error))
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def pantalla_avisos(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Notificaciones",
+            "Novedades escolares recientes y asuntos pendientes. "
+            "Se muestran registros de asistencia, retardos, faltas, conducta, reportes e incidencias."
+        )
+        try:
+            if self.rol == "director":
+                sql = """SELECT id, tipo, alumno, grupo, fecha, estado,
+                                registrado_por, creado_en, detalle
+                         FROM registros_escolares
+                         WHERE estado='Pendiente'
+                            OR creado_en >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                         ORDER BY creado_en DESC LIMIT 250"""
+                filas = self.consultar(sql)
+            else:
+                sql = """SELECT id, tipo, alumno, grupo, fecha, estado,
+                                registrado_por, creado_en, detalle
+                         FROM registros_escolares
+                         WHERE (registrado_por=%s)
+                           AND (estado='Pendiente'
+                            OR creado_en >= DATE_SUB(NOW(), INTERVAL 7 DAY))
+                         ORDER BY creado_en DESC LIMIT 250"""
+                filas = self.consultar(sql, (self.usuario,))
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+            return
+
+        if not filas:
+            tk.Label(self.contenido, text="No hay novedades recientes ni notificaciones pendientes.",
+                     bg=FONDO, fg=GRIS, font=("Segoe UI", 11)).pack(anchor="w", pady=12)
+            return
+
+        for aviso in filas:
+            tarjeta = tk.Frame(self.contenido, bg=BLANCO, padx=14, pady=11,
+                               highlightbackground="#BFDBFE", highlightthickness=1)
+            tarjeta.pack(fill="x", pady=5)
+            titulo = f"{aviso['tipo']} · {aviso['alumno']}"
+            tk.Label(tarjeta, text=titulo, bg=BLANCO, fg=self.oscuro,
+                     font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
+            meta = f"Grupo: {aviso.get('grupo') or 'Sin grupo'}   |   Fecha: {aviso['fecha']}   |   Estado: {aviso.get('estado') or 'Registrado'}"
+            tk.Label(tarjeta, text=meta, bg=BLANCO, fg=AZUL_MEDIO,
+                     font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(3, 0))
+            detalle = aviso.get("detalle") or "Sin detalle adicional."
+            tk.Label(tarjeta, text=detalle, bg=BLANCO, fg=TEXTO,
+                     justify="left", anchor="w", wraplength=850).pack(fill="x", pady=(4, 0))
+            tk.Label(tarjeta, text=f"Registrado por: {aviso.get('registrado_por') or 'Sistema'}",
+                     bg=BLANCO, fg=GRIS, font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(4, 0))
+
+
+    def pantalla_decisiones(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Toma de decisiones",
+            "Registra una acción directiva para un alumno."
+        )
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=18, pady=18)
+        panel.pack(fill="x")
+        panel.columnconfigure(1, weight=1)
+
+        self.campos = {}
+
+        campos = [
+            "Folio del registro (opcional)",
+            "Alumno",
+            "Tipo de acción",
+            "Decisión / justificación"
+        ]
+
+        for i, campo in enumerate(campos):
+            tk.Label(
+                panel, text=campo,
+                bg=BLANCO, fg=TEXTO
+            ).grid(row=i, column=0, sticky="nw", padx=8, pady=8)
+
+            if campo == "Tipo de acción":
+                widget = ttk.Combobox(
+                    panel,
+                    values=[
+                        "Amonestación", "Citatorio Tutor",
+                        "Suspensión Temporal",
+                        "Seguimiento Psicológico"
+                    ],
+                    state="readonly"
+                )
+            elif campo == "Decisión / justificación":
+                widget = tk.Text(panel, height=5, wrap="word")
+            else:
+                widget = ttk.Entry(panel)
+
+            widget.grid(row=i, column=1, sticky="ew", padx=8, pady=8)
+            self.campos[campo] = widget
+
+        self.boton(
+            panel, "Guardar decisión",
+            self.guardar_decision
+        ).grid(row=len(campos), column=1, sticky="e", pady=12)
+
+    def guardar_decision(self):
+        alumno = self.leer_campo("Alumno")
+        accion = self.leer_campo("Tipo de acción")
+        justificacion = self.leer_campo("Decisión / justificación")
+        folio = self.leer_campo("Folio del registro (opcional)")
+
+        if not alumno or not accion:
+            messagebox.showwarning(
+                "Datos incompletos",
+                "Escribe el alumno y selecciona una acción."
+            )
+            return
+
+        try:
+            registro_id = int(folio) if folio else None
+        except ValueError:
+            messagebox.showwarning(
+                "Folio inválido", "El folio debe ser numérico."
+            )
+            return
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+
+            cursor.execute("""
+                INSERT INTO decisiones_directivas
+                (registro_id, alumno, accion, justificacion, director)
+                VALUES (%s,%s,%s,%s,%s)
+            """, (
+                registro_id, alumno, accion,
+                justificacion or None, self.usuario
+            ))
+
+            if registro_id:
+                cursor.execute("""
+                    UPDATE registros_escolares
+                    SET estado='Revisado'
+                    WHERE id=%s
+                """, (registro_id,))
+
+            conexion.commit()
+
+            messagebox.showinfo(
+                "Decisión guardada",
+                "La decisión se guardó correctamente."
+            )
+            self.ir("Inicio")
+
+        except mysql.connector.Error as error:
+            if conexion is not None:
+                conexion.rollback()
+            messagebox.showerror("Error MySQL", str(error))
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+    def pantalla_carta(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Carta compromiso",
+            "Registra los compromisos acordados con el alumno."
+        )
+
+        panel = tk.Frame(self.contenido, bg=BLANCO, padx=18, pady=18)
+        panel.pack(fill="x")
+        panel.columnconfigure(1, weight=1)
+
+        self.campos = {}
+
+        for i, campo in enumerate([
+            "Alumno", "Tutor", "Motivo",
+            "Fecha", "Compromisos del alumno"
+        ]):
+            tk.Label(
+                panel, text=campo,
+                bg=BLANCO, fg=TEXTO
+            ).grid(row=i, column=0, sticky="nw", padx=8, pady=8)
+
+            if campo == "Compromisos del alumno" or campo == "Motivo":
+                widget = tk.Text(panel, height=4, wrap="word")
+            else:
+                widget = ttk.Entry(panel)
+                if campo == "Fecha":
+                    widget.insert(0, date.today().isoformat())
+
+            widget.grid(row=i, column=1, sticky="ew", padx=8, pady=8)
+            self.campos[campo] = widget
+
+        self.boton(
+            panel, "Guardar carta", self.guardar_carta
+        ).grid(row=5, column=1, sticky="e", pady=10)
+
+    def guardar_carta(self):
+        alumno = self.leer_campo("Alumno")
+        fecha = self.leer_campo("Fecha")
+        tutor = self.leer_campo("Tutor")
+        motivo = self.leer_campo("Motivo")
+        compromisos = self.leer_campo("Compromisos del alumno")
+
+        if not alumno:
+            messagebox.showwarning(
+                "Dato obligatorio", "Escribe el nombre del alumno."
+            )
+            return
+
+        try:
+            datetime.strptime(fecha, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showwarning(
+                "Fecha incorrecta", "Usa el formato AAAA-MM-DD."
+            )
+            return
+
+        conexion = None
+
+        try:
+            conexion = conectar()
+            cursor = conexion.cursor()
+            cursor.execute("""
+                INSERT INTO cartas_compromiso
+                (alumno, tutor, motivo, compromisos, fecha, director)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (
+                alumno, tutor or None, motivo or None,
+                compromisos or None, fecha, self.usuario
+            ))
+            conexion.commit()
+
+            messagebox.showinfo(
+                "Carta guardada",
+                "La carta compromiso se guardó en MySQL."
+            )
+            self.ir("Inicio")
+
+        except mysql.connector.Error as error:
+            messagebox.showerror("Error MySQL", str(error))
+
+        finally:
+            if conexion is not None and conexion.is_connected():
+                conexion.close()
+
+   
+    def pantalla_graficas(self):
+        self.limpiar_contenido()
+        if self.rol == "docente":
+            descripcion = "Estadísticas de los alumnos y grupos que tienes asignados."
+            opciones = ["Alumnos por grupo", "Asistencia por estado", "Asistencia del día", "Registros por tipo"]
+        else:
+            descripcion = "Estadísticas generales de alumnos, grupos y actividad de toda la escuela."
+            opciones = ["Alumnos por grupo", "Alumnos por grado", "Alumnos activos e inactivos", "Cantidad de grupos", "Resumen de la escuela", "Asistencia por estado", "Registros por tipo"]
+
+        self.titulo("Gráficos", descripcion)
+        controles = tk.Frame(self.contenido, bg=FONDO)
+        controles.pack(fill="x", pady=8)
+        tipo = ttk.Combobox(controles, values=opciones, state="readonly", width=32)
+        tipo.set(opciones[0])
+        tipo.pack(side="left", padx=(0, 8))
+
+        def dibujar():
+            self.limpiar_grafica()
+            self.grafica_tipo(tipo.get())
+
+        self.boton(controles, "Mostrar estadísticas", dibujar).pack(side="left")
+        self.grafica_tipo(opciones[0])
+
+    def limpiar_grafica(self):
+        if self.canvas_grafica is not None:
+            try:
+                self.canvas_grafica.get_tk_widget().destroy()
+            except tk.TclError:
+                pass
+            self.canvas_grafica = None
+
+    def grafica_tipo(self, tipo, padre=None):
+        if not hasattr(self, "marco_graficas"):
+            self.marco_graficas = None
+        if not GRAFICAS_DISPONIBLES:
+            tk.Label(
+                self.contenido,
+                text="Instala matplotlib con: "
+                     "pip install matplotlib",
+                bg=FONDO, fg=GRIS
+            ).pack(anchor="w", pady=12)
+            return
+
+       
+        destino = padre or self.contenido
+        if (self.marco_graficas is None or
+                not self.marco_graficas.winfo_exists() or
+                self.marco_graficas.master is not destino):
+            self.marco_graficas = tk.Frame(destino, bg=FONDO)
+            self.marco_graficas.pack(fill="both", expand=True)
+        else:
+            for widget in self.marco_graficas.winfo_children():
+                widget.destroy()
+
+        try:
+            if tipo == "Alumnos por grupo":
+                if self.rol == "docente":
+                    filas = self.consultar("""
+                        SELECT g.nombre AS etiqueta, COUNT(a.id) AS cantidad
+                        FROM docente_grupos dg
+                        INNER JOIN grupos_escolares g ON g.id=dg.grupo_id
+                        LEFT JOIN alumnos_escolares a ON a.grupo_id=g.id AND a.activo=TRUE
+                        WHERE dg.docente=%s
+                        GROUP BY g.id, g.nombre ORDER BY g.nombre
+                    """, (self.usuario,))
+                else:
+                    filas = self.consultar("""
+                        SELECT g.nombre AS etiqueta, COUNT(a.id) AS cantidad
+                        FROM grupos_escolares g
+                        LEFT JOIN alumnos_escolares a ON a.grupo_id=g.id AND a.activo=TRUE
+                        GROUP BY g.id, g.nombre ORDER BY g.nombre
+                    """)
+
+            elif tipo == "Alumnos por grado":
+                filas = self.consultar("""
+                    SELECT CONCAT(LEFT(g.nombre, 1), '° grado') AS etiqueta,
+                           COUNT(a.id) AS cantidad
+                    FROM grupos_escolares g
+                    LEFT JOIN alumnos_escolares a ON a.grupo_id=g.id AND a.activo=TRUE
+                    GROUP BY LEFT(g.nombre, 1) ORDER BY etiqueta
+                """)
+
+            elif tipo == "Alumnos activos e inactivos":
+                filas = self.consultar("""
+                    SELECT IF(a.activo=TRUE, 'Activos', 'Inactivos') AS etiqueta,
+                           COUNT(*) AS cantidad
+                    FROM alumnos_escolares a
+                    GROUP BY a.activo ORDER BY a.activo DESC
+                """)
+
+            elif tipo == "Cantidad de grupos":
+                filas = self.consultar("""
+                    SELECT 'Grupos registrados' AS etiqueta, COUNT(*) AS cantidad
+                    FROM grupos_escolares
+                """)
+
+            elif tipo == "Resumen de la escuela":
+                filas = self.consultar("""
+                    SELECT 'Alumnos activos' AS etiqueta, COUNT(*) AS cantidad
+                    FROM alumnos_escolares WHERE activo=TRUE
+                    UNION ALL
+                    SELECT 'Grupos' AS etiqueta, COUNT(*) AS cantidad
+                    FROM grupos_escolares
+                    UNION ALL
+                    SELECT 'Docentes' AS etiqueta, COUNT(*) AS cantidad
+                    FROM usuarios WHERE LOWER(rol)='docente'
+                    UNION ALL
+                    SELECT 'Registros escolares' AS etiqueta, COUNT(*) AS cantidad
+                    FROM registros_escolares
+                """)
+
+            elif tipo == "Registros por tipo":
+                if self.rol == "docente":
+                    filas = self.consultar("""
+                        SELECT tipo AS etiqueta, COUNT(*) AS cantidad
+                        FROM registros_escolares WHERE registrado_por=%s
+                        GROUP BY tipo ORDER BY cantidad DESC
+                    """, (self.usuario,))
+                else:
+                    filas = self.consultar("""
+                        SELECT tipo AS etiqueta, COUNT(*) AS cantidad
+                        FROM registros_escolares
+                        GROUP BY tipo ORDER BY cantidad DESC
+                    """)
+
+            elif tipo == "Asistencia del día":
+                if self.rol == "docente":
+                    filas = self.consultar("""
+                        SELECT ae.estado AS etiqueta, COUNT(*) AS cantidad
+                        FROM asistencias_escolares ae
+                        INNER JOIN docente_grupos dg ON dg.grupo_id=ae.grupo_id
+                        WHERE ae.fecha=%s AND dg.docente=%s
+                        GROUP BY ae.estado ORDER BY cantidad DESC
+                    """, (date.today().isoformat(), self.usuario))
+                else:
+                    filas = self.consultar("""
+                        SELECT estado AS etiqueta, COUNT(*) AS cantidad
+                        FROM asistencias_escolares WHERE fecha=%s
+                        GROUP BY estado ORDER BY cantidad DESC
+                    """, (date.today().isoformat(),))
+
+            elif tipo == "Asistencia por estado":
+                if self.rol == "docente":
+                    filas = self.consultar("""
+                        SELECT ae.estado AS etiqueta, COUNT(*) AS cantidad
+                        FROM asistencias_escolares ae
+                        INNER JOIN docente_grupos dg ON dg.grupo_id=ae.grupo_id
+                        WHERE dg.docente=%s
+                        GROUP BY ae.estado ORDER BY cantidad DESC
+                    """, (self.usuario,))
+                else:
+                    filas = self.consultar("""
+                        SELECT estado AS etiqueta, COUNT(*) AS cantidad
+                        FROM asistencias_escolares
+                        GROUP BY estado ORDER BY cantidad DESC
+                    """)
+
+            else:
+                filas = self.consultar("""
+                    SELECT registrado_por AS etiqueta,
+                           COUNT(*) AS cantidad
+                    FROM registros_escolares
+                    GROUP BY registrado_por
+                    ORDER BY cantidad DESC LIMIT 12
+                """)
+
+        except mysql.connector.Error as error:
+            tk.Label(
+                self.marco_graficas,
+                text=f"Error al consultar datos: {error}",
+                bg=FONDO, fg=ROJO
+            ).pack(anchor="w")
+            return
+
+        if not filas:
+            tk.Label(
+                self.marco_graficas,
+                text="Todavía no hay datos suficientes para esta gráfica.",
+                bg=FONDO, fg=GRIS
+            ).pack(anchor="w", pady=15)
+            return
+
+        etiquetas = [str(f["etiqueta"]) for f in filas]
+        valores = [max(0, int(f["cantidad"] or 0)) for f in filas]
+
+        
+        
+        datos_positivos = [
+            (etiqueta, valor)
+            for etiqueta, valor in zip(etiquetas, valores)
+            if valor > 0
+        ]
+        if not datos_positivos:
+            tk.Label(
+                self.marco_graficas,
+                text="Todavía no hay datos registrados para esta gráfica.",
+                bg=FONDO, fg=GRIS,
+                font=("Segoe UI", 11),
+                padx=12, pady=18
+            ).pack(anchor="center", pady=20)
+            self.canvas_grafica = None
+            return
+
+        etiquetas, valores = zip(*datos_positivos)
+        etiquetas = list(etiquetas)
+        valores = list(valores)
+
+        figura = Figure(figsize=(8, 4.5), dpi=100)
+        eje = figura.add_subplot(111)
+
+        colores = [
+            self.color, "#00E5FF", "#FF2A6D", "#9D4EDD",
+            "#00F5A0", "#FF8C42", "#FCEE0A", "#64748B"
+        ]
+        wedges, _, _ = eje.pie(
+            valores,
+            labels=etiquetas,
+            autopct="%1.1f%%",
+            startangle=90,
+            colors=[colores[i % len(colores)] for i in range(len(valores))],
+            wedgeprops={"edgecolor": FONDO, "linewidth": 1.5}
+        )
+        eje.set_title(tipo, color=TEXTO)
+        eje.axis("equal")
+        figura.tight_layout()
+
+        aviso = tk.Label(
+            self.marco_graficas,
+            text="Haz clic en una sección del pastel para consultar su cantidad.",
+            bg=FONDO, fg=GRIS
+        )
+        aviso.pack(anchor="w")
+
+        def seleccionar_seccion(evento):
+            if evento.artist in wedges:
+                i = list(wedges).index(evento.artist)
+                aviso.config(text=f"{etiquetas[i]}: {valores[i]} registros")
+
+        canvas = FigureCanvasTkAgg(figura, master=self.marco_graficas)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, pady=8)
+        canvas.mpl_connect("pick_event", seleccionar_seccion)
+        for wedge in wedges:
+            wedge.set_picker(True)
+        self.canvas_grafica = canvas
+
+    
+    def pantalla_buscar(self):
+        self.limpiar_contenido()
+        self.titulo(
+            "Buscar registros",
+            "Busca reportes por nombre de alumno."
+        )
+
+        fila = tk.Frame(self.contenido, bg=FONDO)
+        fila.pack(fill="x", pady=8)
+
+        entrada = ttk.Entry(fila)
+        entrada.pack(
+            side="left", fill="x", expand=True, padx=(0, 8)
+        )
+
+        def buscar():
+            texto = entrada.get().strip()
+
+            if not texto:
+                messagebox.showwarning(
+                    "Búsqueda vacía",
+                    "Escribe el nombre de un alumno."
+                )
+                return
+
+            if self.rol == "docente":
+                sql = """
+                    SELECT id, tipo, alumno, grupo, fecha, estado
+                    FROM registros_escolares
+                    WHERE alumno LIKE %s AND registrado_por=%s
+                    ORDER BY creado_en DESC
+                """
+                params = (f"%{texto}%", self.usuario)
+            else:
+                sql = """
+                    SELECT id, tipo, alumno, grupo, fecha,
+                           estado, registrado_por
+                    FROM registros_escolares
+                    WHERE alumno LIKE %s
+                    ORDER BY creado_en DESC
+                """
+                params = (f"%{texto}%",)
+
+            self.mostrar_tabla(
+                "Resultados de búsqueda", sql, params
+            )
+
+        self.boton(fila, "Buscar", buscar).pack(side="left")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SistemaNezahualcoyotl(root)
+    root.mainloop()
