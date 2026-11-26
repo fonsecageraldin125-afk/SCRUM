@@ -1031,7 +1031,13 @@ class SistemaNezahualcoyotl:
                 mensaje = "Los colores se aplicaron correctamente."
                 if guardar and self.usuario:
                     mensaje += "\\nSe guardaron para esta cuenta."
-                messagebox.showinfo("Personalización aplicada", mensaje)
+               /* SOLO PARA AGRANDAR LOS CUADROS AZULES */
+.accesos-rapidos button {
+  padding: 30px !important;
+  font-size: 22px !important;
+  min-height: 110px !important;
+  width: 100% !important;
+} messagebox.showinfo("Personalización aplicada", mensaje)
         except tk.TclError as error:
             messagebox.showerror("Error de apariencia", str(error))
 
@@ -1058,7 +1064,45 @@ class SistemaNezahualcoyotl:
         self.boton_menu_movil = self.boton(
             barra, "Menú", self._abrir_menu_movil, color=self.oscuro
         )
+import { useState } from "react";
 
+export default function PasswordInput() {
+  const [password, setPassword] = useState("");
+  const [ver, setVer] = useState(false);
+
+  return (
+    <div style={{ position: "relative", width: 250 }}>
+      <input
+        type={ver ? "text" : "password"}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Contraseña"
+        style={{
+          width: "100%",
+          padding: "10px 40px 10px 10px",
+          borderRadius: 8,
+          border: "1px solid #ccc",
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => setVer(!ver)}
+        style={{
+          position: "absolute",
+          right: 5,
+          top: "50%",
+          transform: "translateY(-50%)",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          fontSize: 18,
+        }}
+      >
+        {ver ? "🙈" : "👁️"}
+      </button>
+    </div>
+  );
+}
         self.etiqueta_marca = tk.Label(
             barra, text="NEZAHUALCÓYOTL",
             bg=self.oscuro, fg=BLANCO,
