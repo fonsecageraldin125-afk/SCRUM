@@ -73,62 +73,96 @@ GRUPOS_BASE = [
 
 ESTADOS_ASISTENCIA = [
     "Presente", "Falta", "Retardo", "Justificante"
-]
-
-
+]#samadhi
 def conectar():
     return mysql.connector.connect(**DB_CONFIG)
 
-
-def generar_hash_password(password, sal=None):
-    """Genera un hash PBKDF2 con sal aleatoria para nuevas contraseñas."""
-    sal = sal or secrets.token_hex(16)
-    iteraciones = 310000
-    resultado = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), sal.encode("utf-8"), iteraciones
-    ).hex()
-    return f"pbkdf2_sha256${iteraciones}${sal}${resultado}"
-
-
 def verificar_password(password, guardada):
-    """Verifica hashes actuales y formatos anteriores para conservar las cuentas."""
     if guardada is None:
         return False
 
     guardada = str(guardada)
 
-    if guardada.startswith("pbkdf2_sha256$"):
-        try:
-            algoritmo, iteraciones, sal, hash_guardado = guardada.split("$", 3)
-            iteraciones = int(iteraciones)
-            if algoritmo != "pbkdf2_sha256" or not 100000 <= iteraciones <= 2000000:
-                return False
-            calculado = hashlib.pbkdf2_hmac(
-                "sha256", password.encode("utf-8"), sal.encode("utf-8"), iteraciones
-            ).hex()
-            return hmac.compare_digest(calculado, hash_guardado.lower())
-        except (ValueError, TypeError):
-            return False
-
-    
     if hmac.compare_digest(password, guardada):
         return True
 
     sha = hashlib.sha256(password.encode("utf-8")).hexdigest()
+
     if hmac.compare_digest(sha, guardada.lower()):
         return True
 
     if ":" in guardada:
         sal, hash_guardado = guardada.split(":", 1)
+
         candidatos = [
-            hashlib.sha256((password + sal).encode("utf-8")).hexdigest(),
-            hashlib.sha256((sal + password).encode("utf-8")).hexdigest()
+            hashlib.sha256((password + sal).encode()).hexdigest(),
+            hashlib.sha256((sal + password).encode()).hexdigest()
         ]
-        if any(hmac.compare_digest(x, hash_guardado.lower()) for x in candidatos):
+
+        if any(
+            hmac.compare_digest(x, hash_guardado.lower())
+            for x in candidatos
+        ):
             return True
 
     return False
+# 6 - DIRECTOR Y DOCENTES PUEDEN AGREGAR, NO SEPARADO
 
+def obtener_menu(self):
+    return [
+        "Inicio",
+        "Mis grupos",
+        "Pase de lista",
+        "Registrar retardo/falta",
+        "Conducta docente",
+        "Autocontrol",
+        "Registrar incidencia",
+        "Justificantes docente",
+        "Mis reportes",
+        "Retardos y faltas",
+        "Conducta",
+        "Justificantes",
+        "Reportes generales",
+        "Carta compromiso",
+        "Creación de usuarios",
+        "Buscar",
+        "Gráficos",
+        "Personalizado"
+    ]
+
+def ir(self, nombre):
+    self.vista_actual = nombre
+    for opcion, boton_menu in getattr(self, "botones_menu", {}).items():
+        seleccionado = opcion == nombre
+        boton_menu.configure(
+            bg=AZUL_CLARO if seleccionado else self.oscuro,
+            fg=AZUL if seleccionado else BLANCO,
+            font=("Segoe UI", 10, "bold" if seleccionado else "normal")
+        )
+
+    self.limpiar_contenido()
+    vistas = {
+        "Inicio": self.pantalla_inicio,
+        "Mis grupos": self.pantalla_grupos,
+        "Pase de lista": self.pantalla_pase_lista,
+        "Registrar retardo/falta": self.pantalla_retardos,
+        "Conducta docente": self.pantalla_conducta,
+        "Autocontrol": self.pantalla_autocontrol,
+        "Registrar incidencia": self.pantalla_incidencia,
+        "Justificantes docente": self.pantalla_justificantes,
+        "Mis reportes": self.pantalla_reportes,
+        "Retardos y faltas": self.pantalla_director_retardos_faltas,
+        "Conducta": self.pantalla_director_conducta,
+        "Justificantes": self.pantalla_director_justificantes,
+        "Reportes generales": self.pantalla_reportes_generales,
+        "Carta compromiso": self.pantalla_carta,
+        "Creación de usuarios": self.pantalla_usuarios,
+        "Gráficos": self.pantalla_graficas,
+        "Personalizado": self.pantalla_personalizado,
+        "Buscar": self.pantalla_buscar,
+        "Avisos": self.pantalla_avisos
+    }
+    vistas.get(nombre, self.pantalla_inicio)()
 
 def crear_tablas():
     """Crea tablas auxiliares sin borrar tablas existentes."""
